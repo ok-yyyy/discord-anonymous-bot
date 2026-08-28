@@ -8,6 +8,7 @@ import (
 )
 
 var Commands = []discord.ApplicationCommandCreate{
+	helpCommand,
 	pingCommand,
 	setupCommand,
 }
@@ -22,6 +23,7 @@ func RegisterRoutes(r *handler.Mux, cfg discordbot.Config) {
 		cfg: cfg,
 	}
 
+	r.SlashCommand("/help", h.handleHelp)
 	r.SlashCommand("/ping", h.handlePing)
 	r.SlashCommand("/setup", h.handleSetup)
 	r.ButtonComponent(anonymous.OpenModalCustomID, h.handleOpenModal)
