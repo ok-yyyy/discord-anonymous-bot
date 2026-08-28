@@ -7,7 +7,8 @@ import (
 )
 
 type Config struct {
-	BotToken string `env:"DISCORD_BOT_TOKEN,required"`
+	BotToken      string `env:"DISCORD_BOT_TOKEN,required"`
+	AnonymousSalt string `env:"ANONYMOUS_SALT,required"`
 }
 
 func LoadConfig() (Config, error) {
