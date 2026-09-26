@@ -11,9 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/disgoorg/disgo/rest"
-
 	"github.com/ok-yyyy/discord-anonymous-bot/lambda/internal/config"
+	"github.com/ok-yyyy/discord-anonymous-bot/lambda/internal/discord"
 	"github.com/ok-yyyy/discord-anonymous-bot/lambda/internal/handler"
 )
 
@@ -32,7 +31,7 @@ func run() error {
 	}
 
 	commands := handler.Definitions()
-	client := rest.New(rest.NewClient(cfg.BotToken))
+	client := discord.NewRest(cfg.BotToken)
 
 	// bulk overwriteで一括登録する。
 	// ここに含めなかったコマンドは削除される。
