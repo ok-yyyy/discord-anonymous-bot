@@ -8,7 +8,12 @@ import { DiscordAnonymousBotStack } from '../lib/discord-anonymous-bot-stack';
 const ENV_FILE = path.join(__dirname, '..', '.env');
 
 /** Lambdaに渡す必要がある環境変数。欠けていたらsynthの時点で止める。 */
-const REQUIRED_KEYS = ['DISCORD_PUBLIC_KEY'] as const;
+const REQUIRED_KEYS = [
+  'DISCORD_PUBLIC_KEY',
+  'DISCORD_BOT_TOKEN',
+  'DISCORD_APPLICATION_ID',
+  'ANONYMOUS_SALT',
+] as const;
 
 const env = loadEnv();
 
@@ -20,7 +25,10 @@ new DiscordAnonymousBotStack(app, 'DiscordAnonymousBotStack', {
   },
   discord: {
     publicKey: env.DISCORD_PUBLIC_KEY,
+    botToken: env.DISCORD_BOT_TOKEN,
+    applicationId: env.DISCORD_APPLICATION_ID,
   },
+  anonymousSalt: env.ANONYMOUS_SALT,
 });
 
 /**
