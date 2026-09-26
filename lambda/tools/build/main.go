@@ -15,7 +15,7 @@ import (
 
 // targets はcmd配下のうちLambdaにデプロイするものを列挙する。
 // registercmdはローカルから実行するCLIなので含めない。
-var targets = []string{"interaction"}
+var targets = []string{"interaction", "worker"}
 
 func main() {
 	if err := run(); err != nil {

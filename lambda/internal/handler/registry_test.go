@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -52,14 +53,16 @@ func TestLookup(t *testing.T) {
 
 func TestDefinitions(t *testing.T) {
 	defs := Definitions()
-	if len(defs) != 2 {
-		t.Fatalf("got %d definitions, want 2", len(defs))
+
+	got := make([]string, 0, len(defs))
+	for _, d := range defs {
+		got = append(got, d.CommandName())
 	}
 
 	// mapの反復順に引きずられると、登録内容が実行ごとに変わってしまう。
-	if defs[0].CommandName() != "help" || defs[1].CommandName() != "ping" {
-		t.Errorf("definitions are not sorted by name: %s, %s",
-			defs[0].CommandName(), defs[1].CommandName())
+	want := []string{"help", "ping", "setup"}
+	if !slices.Equal(got, want) {
+		t.Errorf("definitions = %v, want %v (sorted by name)", got, want)
 	}
 }
 
@@ -113,7 +116,32 @@ func TestDefinitionsDeclareWhereTheyCanBeUsed(t *testing.T) {
 	}
 }
 
-// 非推奨のdm_permissionを送らない。Contextsで指定する。
+// setupはWebhookを作るのでサーバー限定にする。DMでは作れず機能しない。
+func TestSetupIsGuildOnly(t *testing.T) {
+	got := definitionOf(t, "setup")
+
+	if len(got.Contexts) != 1 || got.Contexts[0] != int(dgo.InteractionContextTypeGuild) {
+		t.Errorf("contexts = %v, want [%d]", got.Contexts, dgo.InteractionContextTypeGuild)
+	}
+	if len(got.IntegrationTypes) != 1 ||
+		got.IntegrationTypes[0] != int(dgo.ApplicationIntegrationTypeGuildInstall) {
+		t.Errorf("integration_types = %v, want [%d]",
+			got.IntegrationTypes, dgo.ApplicationIntegrationTypeGuildInstall)
+	}
+}
+
+// 一般ユーザーが実行できないよう、サーバー管理権限を要求する。
+func TestSetupRequiresManageGuild(t *testing.T) {
+	got := definitionOf(t, "setup")
+
+	want := strconv.Itoa(int(dgo.PermissionManageGuild))
+	if got.DefaultMemberPermissions != want {
+		t.Errorf("default_member_permissions = %q, want %q (Manage Guild)",
+			got.DefaultMemberPermissions, want)
+	}
+}
+
+// 非推奨のdm_permissionを送らない。ContextsとIntegrationTypesで指定する。
 func TestDefinitionsDoNotUseDMPermission(t *testing.T) {
 	for _, def := range Definitions() {
 		raw, err := json.Marshal(def)

@@ -15,8 +15,12 @@ import (
 )
 
 // Interaction はinteraction Lambdaが必要とする設定。
+//
+// Botトークンとsaltは渡さない。このLambdaは署名検証とenqueueしかしないので、
+// 漏れる面を狭くしておく。
 type Interaction struct {
 	PublicKey PublicKey `env:"DISCORD_PUBLIC_KEY,notEmpty"` // PublicKey はInteractionの署名を検証する公開鍵
+	QueueURL  string    `env:"QUEUE_URL,notEmpty"`          // QueueURL は非同期処理を積むSQSキュー
 }
 
 // LoadInteraction はinteraction Lambdaの設定を環境変数から読む。

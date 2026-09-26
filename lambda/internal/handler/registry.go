@@ -6,10 +6,14 @@
 package handler
 
 import (
+	"context"
 	"maps"
 	"slices"
+	"time"
 
 	dgo "github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 )
 
 // Mode はコマンドをどちらのLambdaで処理するかを表す。
@@ -22,6 +26,16 @@ const (
 	Async
 )
 
+// Deps はAsyncハンドラが使う依存。
+type Deps struct {
+	Rest          rest.Rest
+	ApplicationID snowflake.ID
+	// Salt は匿名IDの導出に使う。ログに出さないこと。
+	Salt string
+	// Now は現在時刻。テストで固定できるようにしている。
+	Now func() time.Time
+}
+
 // Command は1つのInteractionに対する処理の定義。
 type Command struct {
 	Mode Mode
@@ -30,19 +44,29 @@ type Command struct {
 	// ボタンやモーダルのように登録が要らないものはnilにする。
 	Definition *dgo.SlashCommandCreate
 
+	// Validate はAsyncのとき、SQSに積む前に行う検査。
+	// UserErrorを返すとその内容が実行者に表示され、SQSには積まれない。
+	Validate func(dgo.Interaction) error
+
 	// Handle はMode == Syncのときの処理。
 	//
 	// context.Contextを渡していないのは意図的で、ネットワークI/Oを書けないようにするため。
 	// 3秒以内に返せなくなった時点でAsyncにする。
 	Handle func(dgo.Interaction) (*dgo.InteractionResponse, error)
+
+	// Work はMode == Asyncのときの処理。worker Lambdaで実行する。
+	Work func(context.Context, *Deps, dgo.Interaction) error
 }
 
 // Registry はInteractionの識別子から処理を引く表。
 //
 // キーはスラッシュコマンド名、またはコンポーネント/モーダルのcustom_id。
 var Registry = map[string]Command{
-	"ping": ping,
-	"help": help,
+	"ping":         ping,
+	"help":         help,
+	"setup":        setup,
+	customIDOpen:   openModal,
+	customIDSubmit: postAnonymousMessage,
 }
 
 // Lookup はInteractionに対応する処理を返す。
@@ -56,6 +80,10 @@ func identifier(i dgo.Interaction) string {
 	switch i := i.(type) {
 	case dgo.ApplicationCommandInteraction:
 		return i.Data.CommandName()
+	case dgo.ComponentInteraction:
+		return i.Data.CustomID()
+	case dgo.ModalSubmitInteraction:
+		return i.Data.CustomID
 	default:
 		return ""
 	}

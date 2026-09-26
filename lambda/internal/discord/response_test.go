@@ -127,3 +127,75 @@ func TestEmbed(t *testing.T) {
 		t.Errorf("body = %s, want allowed_mentions.parse to be an empty array", resp.Body)
 	}
 }
+
+// modalSubmit / slashCommand はackの分岐を試すためのInteraction。
+func interactionOfType(t *testing.T, raw string) dgo.Interaction {
+	t.Helper()
+
+	i, err := dgo.UnmarshalInteraction([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return i
+}
+
+// MODAL_SUBMITは無言ackにする。dataを付けるとDiscordが拒否しうるのでtypeだけ送る。
+func TestAckIsSilentForModalSubmit(t *testing.T) {
+	i := interactionOfType(t, `{"id":"1","application_id":"2","type":5,"token":"t","version":1,
+		"channel":{"id":"4","type":0},
+		"member":{"user":{"id":"5","username":"u","discriminator":"0"}},
+		"data":{"custom_id":"x","components":[]}}`)
+
+	if AckShowsThinking(i) {
+		t.Error("AckShowsThinking = true, want false for a modal submit")
+	}
+
+	resp, err := Respond(Ack(i))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(resp.Body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["type"] != float64(dgo.InteractionResponseTypeDeferredUpdateMessage) {
+		t.Errorf("type = %v, want %d", got["type"], dgo.InteractionResponseTypeDeferredUpdateMessage)
+	}
+	if _, ok := got["data"]; ok {
+		t.Errorf("body = %s, want no data", resp.Body)
+	}
+}
+
+// スラッシュコマンドではtype 6が使えないので、ephemeralなdeferredになる。
+func TestAckIsEphemeralDeferredForSlashCommand(t *testing.T) {
+	i := interactionOfType(t, `{"id":"1","application_id":"2","type":2,"token":"t","version":1,
+		"channel":{"id":"4","type":0},
+		"member":{"user":{"id":"5","username":"u","discriminator":"0"}},
+		"data":{"id":"3","name":"setup","type":1}}`)
+
+	if !AckShowsThinking(i) {
+		t.Error("AckShowsThinking = false, want true for a slash command")
+	}
+
+	resp, err := Respond(Ack(i))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		Type int `json:"type"`
+		Data struct {
+			Flags int `json:"flags"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != int(dgo.InteractionResponseTypeDeferredCreateMessage) {
+		t.Errorf("type = %d, want %d", got.Type, dgo.InteractionResponseTypeDeferredCreateMessage)
+	}
+	if got.Data.Flags&int(dgo.MessageFlagEphemeral) == 0 {
+		t.Errorf("flags = %d, want the ephemeral flag", got.Data.Flags)
+	}
+}

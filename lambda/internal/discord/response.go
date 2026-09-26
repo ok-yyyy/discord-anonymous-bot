@@ -56,3 +56,43 @@ func Respond(resp dgo.InteractionResponse) (events.LambdaFunctionURLResponse, er
 func Status(code int) events.LambdaFunctionURLResponse {
 	return events.LambdaFunctionURLResponse{StatusCode: code}
 }
+
+// Modal は入力ダイアログを開く応答を組み立てる。
+//
+// deferredにできないので、これを返すハンドラは同期で完結させる必要がある。
+func Modal(modal dgo.ModalCreate) dgo.InteractionResponse {
+	return dgo.InteractionResponse{Type: dgo.InteractionResponseTypeModal, Data: modal}
+}
+
+// Ack はInteractionを受け付けたことを伝える応答を返す。
+//
+// どの方式になるかはInteractionの種類で決まる。type 6（無言ack）は
+// コンポーネントとMODAL_SUBMITでしか使えず、スラッシュコマンドでは
+// type 5（deferred）しか選べない。
+func Ack(i dgo.Interaction) dgo.InteractionResponse {
+	if !AckShowsThinking(i) {
+		return dgo.InteractionResponse{Type: dgo.InteractionResponseTypeDeferredUpdateMessage}
+	}
+
+	// 投稿内容が公開チャンネルに漏れないよう、実行者にだけ見せる。
+	return dgo.InteractionResponse{
+		Type: dgo.InteractionResponseTypeDeferredCreateMessage,
+		Data: dgo.MessageCreate{Flags: dgo.MessageFlagEphemeral},
+	}
+}
+
+// AckShowsThinking はackが「考え中…」を表示するかどうかを返す。
+//
+// trueのときは@originalがその「考え中…」を指すので、結果はそれを編集して伝える。
+// 編集しないと「考え中…」が残り続ける。
+//
+// falseのときは@originalがモーダルやボタンのある元のメッセージを指す。
+// 編集するとそのメッセージが書き換わってしまうので、結果はfollowupで伝える。
+func AckShowsThinking(i dgo.Interaction) bool {
+	switch i.Type() {
+	case dgo.InteractionTypeComponent, dgo.InteractionTypeModalSubmit:
+		return false
+	default:
+		return true
+	}
+}

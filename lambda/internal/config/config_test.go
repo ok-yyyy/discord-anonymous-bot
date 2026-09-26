@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/ed25519"
 	"encoding/hex"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,7 @@ func validKey(t *testing.T) string {
 func TestLoadInteraction(t *testing.T) {
 	key := validKey(t)
 	t.Setenv("DISCORD_PUBLIC_KEY", key)
+	t.Setenv("QUEUE_URL", "https://sqs.example.test/queue")
 
 	cfg, err := LoadInteraction()
 	if err != nil {
@@ -27,6 +29,23 @@ func TestLoadInteraction(t *testing.T) {
 	}
 	if hex.EncodeToString(cfg.PublicKey) != key {
 		t.Errorf("public key = %x, want %s", cfg.PublicKey, key)
+	}
+	if cfg.QueueURL != "https://sqs.example.test/queue" {
+		t.Errorf("queue url = %q", cfg.QueueURL)
+	}
+}
+
+// 受信側にBotトークンとsaltを渡さない。漏れる面を狭くしておく。
+func TestInteractionHasNoSecrets(t *testing.T) {
+	declared := map[string]bool{}
+	for _, f := range reflect.VisibleFields(reflect.TypeFor[Interaction]()) {
+		declared[f.Tag.Get("env")] = true
+	}
+
+	for _, key := range []string{"DISCORD_BOT_TOKEN,notEmpty", "ANONYMOUS_SALT,notEmpty"} {
+		if declared[key] {
+			t.Errorf("Interaction declares %q, which it does not need", key)
+		}
 	}
 }
 
@@ -44,6 +63,7 @@ func TestLoadInteractionRejectsBadKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("DISCORD_PUBLIC_KEY", tt.key)
+			t.Setenv("QUEUE_URL", "https://sqs.example.test/queue")
 
 			if _, err := LoadInteraction(); err == nil {
 				t.Error("want an error")
