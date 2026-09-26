@@ -24,3 +24,17 @@
 
 # env file
 .env
+
+### CDK / Node (cdk init が生成した分) ###
+*.js
+!jest.config.js
+*.d.ts
+node_modules
+
+# CDK asset staging directory
+.cdk.staging
+cdk.out
+
+### Lambda のビルド成果物 ###
+# go run ./tools/build が出力する bootstrap バイナリ
+lambda/build/
