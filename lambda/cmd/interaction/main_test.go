@@ -97,7 +97,36 @@ func TestHandleRejectsMalformedInteraction(t *testing.T) {
 	}
 }
 
-// 未実装のInteractionでも応答は返す。無応答だと実行者にはエラーだけが残る。
+// 登録済みの同期コマンドはその場で本文を返す。
+func TestHandleSyncCommand(t *testing.T) {
+	a, priv := newApp(t)
+
+	body := `{"id":"1","application_id":"2","type":2,"token":"t","version":1,` +
+		`"data":{"id":"3","name":"ping","type":1},` +
+		`"channel":{"id":"4","type":0},"user":{"id":"5","username":"u","discriminator":"0"}}`
+
+	resp, err := a.handle(context.Background(), signed(priv, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := responseType(t, resp); got != dgo.InteractionResponseTypeCreateMessage {
+		t.Fatalf("response type = %d, want %d", got, dgo.InteractionResponseTypeCreateMessage)
+	}
+
+	var got struct {
+		Data struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Data.Content != "pong" {
+		t.Errorf("content = %q, want pong", got.Data.Content)
+	}
+}
+
+// 未登録のコマンドでも応答は返す。無応答だと実行者にはエラーだけが残る。
 func TestHandleUnknownInteractionStillResponds(t *testing.T) {
 	a, priv := newApp(t)
 

@@ -17,13 +17,19 @@ func Pong() dgo.InteractionResponse {
 // Message はその場で本文を返す応答を組み立てる。
 // ephemeralにすると実行者にだけ見える。
 func Message(content string, ephemeral bool) dgo.InteractionResponse {
-	data := dgo.MessageCreate{
-		Content: content,
-		// こちらから送る文面でメンションが飛ばないようにする。
-		// Parseを省くと "parse":null になり、Discordは未指定として扱う。
-		// 空配列を明示しないとメンションが抑止されない。
-		AllowedMentions: &dgo.AllowedMentions{Parse: []dgo.AllowedMentionType{}},
-	}
+	return createMessage(dgo.MessageCreate{Content: content}, ephemeral)
+}
+
+// Embed はembedを1つ含む応答を組み立てる。
+func Embed(embed dgo.Embed, ephemeral bool) dgo.InteractionResponse {
+	return createMessage(dgo.MessageCreate{Embeds: []dgo.Embed{embed}}, ephemeral)
+}
+
+func createMessage(data dgo.MessageCreate, ephemeral bool) dgo.InteractionResponse {
+	// こちらから送る文面でメンションが飛ばないようにする。
+	// Parseを省くと "parse":null になり、Discordは未指定として扱う。
+	// 空配列を明示しないとメンションが抑止されない。
+	data.AllowedMentions = &dgo.AllowedMentions{Parse: []dgo.AllowedMentionType{}}
 	if ephemeral {
 		data.Flags = dgo.MessageFlagEphemeral
 	}

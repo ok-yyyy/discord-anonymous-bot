@@ -17,6 +17,7 @@ import (
 
 	"github.com/ok-yyyy/discord-anonymous-bot/lambda/internal/config"
 	"github.com/ok-yyyy/discord-anonymous-bot/lambda/internal/discord"
+	"github.com/ok-yyyy/discord-anonymous-bot/lambda/internal/handler"
 )
 
 // msgNotImplemented はまだ実装していないInteractionへの応答。
@@ -24,6 +25,9 @@ import (
 // コマンドを未登録の間は届かないはずだが、無応答にすると実行者には
 // 「アプリケーションが応答しませんでした」とだけ出て原因が分からない。
 const msgNotImplemented = "このコマンドは使えません。"
+
+// msgFailed は処理に失敗したときの応答。原因はログに残し、実行者には見せない。
+const msgFailed = "処理に失敗しました。時間をおいてもう一度お試しください。"
 
 type app struct {
 	cfg *config.Interaction
@@ -69,7 +73,23 @@ func (a *app) route(ctx context.Context, i dgo.Interaction) dgo.InteractionRespo
 		return discord.Pong()
 	}
 
-	// TODO: Registryを引いて Sync / Async に振り分ける。
-	slog.WarnContext(ctx, "no handler for the interaction", "interaction_type", i.Type())
-	return discord.Message(msgNotImplemented, true)
+	cmd, ok := handler.Lookup(i)
+	if !ok {
+		// Discordに登録済みのコマンドとデプロイ済みのコードがずれている状態。
+		slog.WarnContext(ctx, "no handler for the interaction", "interaction_type", i.Type())
+		return discord.Message(msgNotImplemented, true)
+	}
+
+	if cmd.Mode != handler.Sync {
+		// TODO: SQSに積んでdeferredを返す。
+		slog.WarnContext(ctx, "async commands are not wired up yet", "interaction_type", i.Type())
+		return discord.Message(msgNotImplemented, true)
+	}
+
+	resp, err := cmd.Handle(i)
+	if err != nil {
+		slog.ErrorContext(ctx, "sync handler failed", "interaction_type", i.Type(), "error", err)
+		return discord.Message(msgFailed, true)
+	}
+	return *resp
 }

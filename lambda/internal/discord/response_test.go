@@ -69,8 +69,8 @@ func TestMessageEphemeralFlag(t *testing.T) {
 	}
 }
 
-// parseは空配列で送る必要がある。nullだとDiscordは未指定として扱い、
-// メンションがそのまま飛んでしまう。
+// parseは空配列で送る必要がある。
+// nullだとDiscordは未指定として扱い、メンションがそのまま飛んでしまう。
 func TestMessageSuppressesMentions(t *testing.T) {
 	resp, err := Respond(Message("@everyone", false))
 	if err != nil {
@@ -90,5 +90,40 @@ func TestStatus(t *testing.T) {
 	}
 	if resp.Body != "" {
 		t.Errorf("body = %q, want empty", resp.Body)
+	}
+}
+
+// embedを返す場合もメンションの抑止とephemeralが効くこと。
+func TestEmbed(t *testing.T) {
+	resp, err := Respond(Embed(dgo.Embed{Title: "だいめい", Description: "@everyone"}, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		Data struct {
+			Content string `json:"content"`
+			Flags   int    `json:"flags"`
+			Embeds  []struct {
+				Title string `json:"title"`
+			} `json:"embeds"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &got); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got.Data.Embeds) != 1 || got.Data.Embeds[0].Title != "だいめい" {
+		t.Errorf("embeds = %+v, want one embed titled だいめい", got.Data.Embeds)
+	}
+	if got.Data.Content != "" {
+		t.Errorf("content = %q, want empty", got.Data.Content)
+	}
+	if got.Data.Flags&int(dgo.MessageFlagEphemeral) == 0 {
+		t.Errorf("flags = %d, want the ephemeral flag", got.Data.Flags)
+	}
+	// embedの中の @everyone も飛ばさない。
+	if !strings.Contains(resp.Body, `"parse":[]`) {
+		t.Errorf("body = %s, want allowed_mentions.parse to be an empty array", resp.Body)
 	}
 }
