@@ -7,6 +7,7 @@ Discordのチャンネルに匿名でメッセージを投稿できるBot。
 - 表示名は日替わりで、組み合わせに限りがあるため同じ名前でも別の人のことがあります
 
 設計と判断理由は [CLAUDE.md](./CLAUDE.md) にあります。
+[利用規約](./docs/terms-of-service.md) / [プライバシーポリシー](./docs/privacy-policy.md)
 
 ## 構成
 
