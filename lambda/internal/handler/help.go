@@ -57,7 +57,8 @@ func helpEmbed() dgo.Embed {
 			{
 				Name: "コマンド一覧",
 				Value: "`/help`: この使い方を表示します\n" +
-					"`/ping`: 疎通確認をします",
+					"`/ping`: 疎通確認をします\n" +
+					"`/setup`: パネルを設置します",
 			},
 		},
 	}
