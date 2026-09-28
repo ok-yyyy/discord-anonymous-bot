@@ -20,7 +20,7 @@ Discord ──HTTP POST──> Lambda Function URL
                              │
               ┌──────────────┴───────────────┐
         （Sync）                        （Async）
-   その場で type 4 を返す           SQS へ enqueue して type 5
+   その場で応答を返す               SQS へ enqueue して ack
                                            │
                                     SQS (FIFO) ──> DLQ
                                            │
@@ -48,8 +48,8 @@ Bot 本体として投稿すると匿名にならない。`username` / `avatar_u
 type Mode int
 
 const (
-    Sync  Mode = iota // interaction Lambda 内で完結し、type 4 を返す
-    Async             // SQS に積み、type 5 を返す。実処理は worker
+    Sync  Mode = iota // interaction Lambda 内で完結し、その場で応答を返す
+    Async             // SQS に積み、ack だけ返す。実処理は worker
 )
 
 type Command struct {
@@ -79,7 +79,8 @@ var Registry = map[string]Command{ /* 識別子 -> 定義 */ }
 
 ### 応答順序: enqueue が先、ack は後
 
-`Async` は **SQS に積んでから、HTTP レスポンスのボディで type 5 を返す**。
+`Async` は **SQS に積んでから、HTTP レスポンスのボディで ack を返す**
+（ack の種類は「Discord Interaction の制約」3 を参照）。
 Discord は `POST /interactions/{id}/{token}/callback` で先に ack して元のリクエストに 202 を
 返す方式も認めているが、採用しない。ack 先行だと 3 秒の予算に discord.com への往復を
 持ち込むことになるうえ、enqueue 失敗時のエラーを followup で別途送る必要が出る。
@@ -106,6 +107,8 @@ Go は `lambda/` 配下の独立した Go モジュール。
 .
 ├── bin/ lib/ test/               # CDK（cdk init の生成名のままにする）
 ├── cdk.json / package.json / tsconfig.json / jest.config.js
+├── Taskfile.yml                  # build + deploy / test をまとめた入口
+├── docs/                         # 利用規約・プライバシーポリシー
 ├── lambda/                       # Go モジュール
 │   ├── cmd/
 │   │   ├── interaction/          # Function URL ハンドラ（同期・軽量）
@@ -126,9 +129,14 @@ Go は `lambda/` 配下の独立した Go モジュール。
   含まれる CDK の Go テンプレート（`%name%.template.go`）を Go が読もうとして
   `go vet ./...` / `go test ./...` が失敗する。`lambda/` に切れば探索範囲から外れる。
 - `internal/discord` は **disgo で足りない部分だけ**を持つ。Interaction の型や REST 呼び出しを
-  包み直さない（薄いラッパを重ねても読みにくくなるだけ）。具体的には Function URL の
-  リクエストから署名検証に渡す形への変換と、よく使う応答の組み立て。
-- `internal/config` で環境変数を起動時に一括ロードし、**必須値が欠けていたら `log.Fatal`**。
+  包み直さない（薄いラッパを重ねても読みにくくなるだけ）。今あるのは次の 4 つ。
+  - Function URL のリクエストから署名検証に渡す形への変換（`VerifiedBody`）
+  - ack と応答の組み立て（`Ack` / `Message` / `Embed` / `Modal`）
+  - メンションの既定を反転させた REST クライアント（`NewRest`）
+  - REST エラーの状態コード判定（`IsForbidden` / `IsNotFound`）。
+    HTTP と `rest.Error` の知識を `handler` に持ち込まないため
+- `internal/config` で環境変数を起動時に一括ロードし、**必須値が欠けていたら起動させない**
+  （`slog.Error` してから `os.Exit(1)`）。
   各 `main.go` で `os.Getenv` を直接読まない（鍵や salt が空のまま動く事故を防ぐ）。
   読み取りは `caarlos0/env/v11` のタグで宣言し、**`required` ではなく `notEmpty` を使う**。
   `required` は「変数が設定されていること」しか見ないため、空文字が通ってしまう。
@@ -164,11 +172,10 @@ task が無くても個々のコマンドがそのまま動く状態を保つ。
 **ローカルからの `cdk deploy` のみ。** CI/CD は組まない。
 認証情報は profile ではなく `aws login`（AWS CLI v2）で取得する。
 
-1. `cd lambda && go run ./tools/build`
-2. root で `npx cdk deploy`
-3. Function URL が変わったときだけ Discord Developer Portal の
+1. `task deploy`（ビルドしてから `cdk deploy`。個別に実行してもよい）
+2. Function URL が変わったときだけ Discord Developer Portal の
    **Interactions Endpoint URL** を更新（保存時に Discord が PING を投げて検証する）
-4. コマンド定義を変えたときだけ `go run ./cmd/registercmd`
+3. コマンド定義を変えたときだけ `lambda/` で `go run ./cmd/registercmd`
 
 Lambda のコードだけ直すときも `cdk deploy` でよい（`aws lambda update-function-code` を
 手で叩くと CDK の状態とずれる）。
@@ -232,10 +239,10 @@ interaction Lambda を 3 秒より長くしても Discord が先に諦めるだ�
 2. **PING**（type 1）は同期で `{"type":1}`。SQS には流さない。
 3. **3 秒ルール**: `Async` は即 ack する。方式は Interaction の種類で決まるので
    コマンド側で選ばない（`discord.Ack` / `discord.AckShowsThinking`）。
-   - コンポーネント / MODAL_SUBMIT → **type 6（DEFERRED_UPDATE_MESSAGE）で無言 ack**。
+   - コンポーネント / MODAL_SUBMIT -> **type 6（DEFERRED_UPDATE_MESSAGE）で無言 ack**。
      「考え中…」が出ない。`@original` は**元のメッセージ（パネル）を指す**ので、
      結果は `CreateFollowupMessage` で伝える（編集するとパネルが書き換わる）。
-   - スラッシュコマンド → type 5（deferred, ephemeral）。type 6 は使えない。
+   - スラッシュコマンド -> type 5（deferred, ephemeral）。type 6 は使えない。
      `@original` が「考え中…」を指すので、**必ず `UpdateInteractionResponse` で埋める**
      （放置すると「考え中…」が消えない）。
    投稿者への応答は ephemeral にして、投稿内容が公開チャンネルに漏れないようにする。
@@ -270,13 +277,13 @@ sum := sha256.Sum256([]byte(userID + ":" + date + ":" + salt))   // 32 バイト
 
 ## コマンド / インタラクション仕様
 
-| トリガー       | モード  | 応答                                                              |
-| -------------- | ------- | ----------------------------------------------------------------- |
-| `/ping`        | `Sync`  | `pong` を返すだけ。疎通確認用                                     |
-| `/help`        | `Sync`  | ephemeral。使い方と匿名化の説明（名前の衝突・日替わりを含む）     |
-| `/setup`       | `Async` | Webhook を用意しパネルを投稿。実行者にのみ ephemeral で結果を返す |
-| パネルのボタン | `Sync`  | type 9 でモーダルを返す。**defer 不可なので I/O 禁止**            |
-| モーダル送信   | `Async` | **type 6 で無言 ack** → worker が匿名投稿（成功時は何も表示しない）|
+| トリガー       | モード  | 応答                                                                 |
+| -------------- | ------- | -------------------------------------------------------------------- |
+| `/ping`        | `Sync`  | ephemeral。`pong` を返すだけの疎通確認用                             |
+| `/help`        | `Sync`  | ephemeral。使い方と匿名化の説明（名前の衝突・日替わりを含む）        |
+| `/setup`       | `Async` | Webhook を用意しパネルを投稿。実行者にのみ ephemeral で結果を返す    |
+| パネルのボタン | `Sync`  | type 9 でモーダルを返す。**defer 不可なので I/O 禁止**               |
+| モーダル送信   | `Async` | **type 6 で無言 ack** -> worker が匿名投稿（成功時は何も表示しない） |
 
 ### コマンド定義と登録
 
@@ -286,10 +293,14 @@ sum := sha256.Sum256([]byte(userID + ":" + date + ":" + salt))   // 32 バイト
   guild 登録は使わない。個別の `Create` だと削除したコマンドが残る。
 - global 登録は**即時反映を期待しない**。クライアント側にキャッシュがあるので、変更が
   見えなくてもまず待つ・クライアントを再起動する（実装を疑う前に）。
-- すべてサーバー内限定にする。DM では Webhook を作れず機能しないため。
-  - `Contexts: []discord.InteractionContextType{discord.InteractionContextTypeGuild}`
-  - `IntegrationTypes: []discord.ApplicationIntegrationType{discord.ApplicationIntegrationTypeGuildInstall}`
-  - `dm_permission` は**非推奨**。`Contexts` で指定する。
+- `Contexts` と `IntegrationTypes` を**必ず明示する**。省略すると Discord の既定に従い、
+  意図しない場所で使えてしまう。`dm_permission` は**非推奨**なので使わない。
+- **Webhook を使う `/setup` はサーバー限定**にする（`InteractionContextTypeGuild` と
+  `ApplicationIntegrationTypeGuildInstall` のみ）。DM では Webhook を作れず機能しない。
+- 情報を表示するだけの `/ping` と `/help` は DM とユーザーインストールも許可している。
+  **`ApplicationIntegrationTypeUserInstall` を使うには Developer Portal の
+  Installation Contexts で User Install を有効にしておく必要がある**
+  （アプリ側が対応していない context は登録時に拒否される）。
 
 ### Bot に必要な権限
 
@@ -307,7 +318,7 @@ Manage Webhooks が無いと `/setup` が失敗する。**Read Message History �
   パネルを投稿する。パネル自体は Bot として投稿してよい（匿名投稿ではない）。
 - `default_member_permissions` で **Manage Guild** を要求し、一般ユーザーが実行できないようにする。
 
-### ボタン → モーダル → 匿名投稿
+### ボタン -> モーダル -> 匿名投稿
 
 - `custom_id` は `anon:` 名前空間で分岐する（`anon:open` / `anon:submit`）。
 - モーダルの入力欄は `TextInputComponent`（`TextInputStyleParagraph`）1 つ。
@@ -315,16 +326,17 @@ Manage Webhooks が無いと `/setup` が失敗する。**Read Message History �
   ラベルを付ける方法はこれだけ。
 - **`MaxLength: 2000`** を設定して Discord のメッセージ上限を入力段階で弾く
   （設定しないと 4000 文字まで入力でき、送信後にエラーになる）。
-  `MinLength: 1` / `Required: true` も付ける。`title` とラベルは 45 文字以内。
+  `Required: true` も付ける（空送信を入力段階で弾く）。`title` とラベルは 45 文字以内。
+  空白だけの入力は Discord 側で弾けないので、`Validate` で落とす。
 - 投稿先は**モーダル送信時に渡される `channel_id`**。パネルの位置を覚える必要はない。
 - interaction Lambda は本文の空文字と長さだけ検証して SQS に積む。
 - worker は匿名 ID を導出し、`CreateWebhookMessage` を `username` / `avatar_url` 上書きで呼ぶ。
-  **`allowed_mentions` は `{"parse": []}` を明示**し、`@everyone` やロールメンションが
+  **`allowed_mentions` は `discord.NoMentions()` を明示**し、`@everyone` やロールメンションが
   匿名投稿から飛ばないようにする。
-- **REST クライアントは `internal/discord.NewRest` で作る。** disgo は `AllowedMentions` が
+- **REST クライアントは必ず `internal/discord.NewRest` で作る。** disgo は `AllowedMentions` が
   nil の送信に users / roles / everyone すべてを許可する値を埋めるため、
-  `rest.WithDefaultAllowedMentions` で既定を空に反転させてある。指定漏れが 1 か所
-  あるだけでメンションが飛ぶので、呼び出し側の注意に頼らない。
+  `rest.WithDefaultAllowedMentions` で既定を空に反転させてある。利用者の入力を載せる
+  匿名投稿だけは、既定に頼らず明示もしておく。
 - **Webhook が消えていても再作成しない。** 「`/setup` をやり直してください」と followup で伝える
   （勝手に作り直すと権限の無いチャンネルに投稿しうる）。
 - 投稿後、**パネルを作り直してチャンネルの一番下に置く**。投稿が増えるとパネルが上に
@@ -354,6 +366,7 @@ Manage Webhooks が無いと `/setup` が失敗する。**Read Message History �
 | 匿名投稿                | `CreateWebhookMessage`          |
 | Webhook 一覧 / 作成     | `GetWebhooks` / `CreateWebhook` |
 | パネル投稿              | `CreateMessage`                 |
+| パネルの掃除            | `GetMessages` / `DeleteMessage` |
 | コマンド登録            | `SetGlobalCommands`             |
 
 followup と Webhook 実行は **Bot トークン不要**（token 自体が認証）。Bot トークンが要るのは
