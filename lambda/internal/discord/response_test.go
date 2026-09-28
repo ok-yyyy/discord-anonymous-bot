@@ -32,47 +32,35 @@ func TestPongSerialization(t *testing.T) {
 	}
 }
 
-func TestMessageEphemeralFlag(t *testing.T) {
-	tests := []struct {
-		name      string
-		ephemeral bool
-		wantFlag  bool
-	}{
-		{"ephemeral", true, true},
-		{"public", false, false},
+// 投稿内容が公開チャンネルに漏れないよう、その場で返す応答は実行者にだけ見せる。
+func TestMessageIsEphemeral(t *testing.T) {
+	resp, err := Respond(Message("hi"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resp, err := Respond(Message("hi", tt.ephemeral))
-			if err != nil {
-				t.Fatal(err)
-			}
+	var got struct {
+		Data struct {
+			Content string `json:"content"`
+			Flags   int    `json:"flags"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &got); err != nil {
+		t.Fatal(err)
+	}
 
-			var got struct {
-				Data struct {
-					Content string `json:"content"`
-					Flags   int    `json:"flags"`
-				} `json:"data"`
-			}
-			if err := json.Unmarshal([]byte(resp.Body), &got); err != nil {
-				t.Fatal(err)
-			}
-
-			if got.Data.Content != "hi" {
-				t.Errorf("content = %q, want hi", got.Data.Content)
-			}
-			if hasFlag := got.Data.Flags&int(dgo.MessageFlagEphemeral) != 0; hasFlag != tt.wantFlag {
-				t.Errorf("ephemeral flag = %v, want %v (flags = %d)", hasFlag, tt.wantFlag, got.Data.Flags)
-			}
-		})
+	if got.Data.Content != "hi" {
+		t.Errorf("content = %q, want hi", got.Data.Content)
+	}
+	if got.Data.Flags&int(dgo.MessageFlagEphemeral) == 0 {
+		t.Errorf("flags = %d, want the ephemeral flag", got.Data.Flags)
 	}
 }
 
 // parseは空配列で送る必要がある。
 // nullだとDiscordは未指定として扱い、メンションがそのまま飛んでしまう。
 func TestMessageSuppressesMentions(t *testing.T) {
-	resp, err := Respond(Message("@everyone", false))
+	resp, err := Respond(Message("@everyone"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +83,7 @@ func TestStatus(t *testing.T) {
 
 // embedを返す場合もメンションの抑止とephemeralが効くこと。
 func TestEmbed(t *testing.T) {
-	resp, err := Respond(Embed(dgo.Embed{Title: "だいめい", Description: "@everyone"}, true))
+	resp, err := Respond(Embed(dgo.Embed{Title: "だいめい", Description: "@everyone"}))
 	if err != nil {
 		t.Fatal(err)
 	}

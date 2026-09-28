@@ -2,13 +2,13 @@ package handler
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
 
 	dgo "github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
+
+	"github.com/ok-yyyy/discord-anonymous-bot/lambda/internal/discord"
 )
 
 // webhookName は作成するWebhookの名前。
@@ -20,7 +20,7 @@ const webhookName = "anonymous-bot"
 func findWebhook(ctx context.Context, d *Deps, channelID snowflake.ID) (*dgo.IncomingWebhook, error) {
 	webhooks, err := d.Rest.GetWebhooks(channelID, rest.WithCtx(ctx))
 	if err != nil {
-		if isForbidden(err) {
+		if discord.IsForbidden(err) {
 			return nil, userErrorf("このチャンネルのWebhookを確認できませんでした。Botに「ウェブフックの管理」権限があるか確認してください。")
 		}
 		return nil, fmt.Errorf("list webhooks: %w", err)
@@ -52,23 +52,10 @@ func ensureWebhook(ctx context.Context, d *Deps, channelID snowflake.ID) (*dgo.I
 
 	created, err := d.Rest.CreateWebhook(channelID, dgo.WebhookCreate{Name: webhookName}, rest.WithCtx(ctx))
 	if err != nil {
-		if isForbidden(err) {
+		if discord.IsForbidden(err) {
 			return nil, userErrorf("Webhookを作成できませんでした。Botに「ウェブフックの管理」権限があるか確認してください。")
 		}
 		return nil, fmt.Errorf("create webhook: %w", err)
 	}
 	return created, nil
-}
-
-func isForbidden(err error) bool {
-	return hasStatus(err, http.StatusForbidden)
-}
-
-func isNotFound(err error) bool {
-	return hasStatus(err, http.StatusNotFound)
-}
-
-func hasStatus(err error, status int) bool {
-	var restErr *rest.Error
-	return errors.As(err, &restErr) && restErr.Response != nil && restErr.Response.StatusCode == status
 }

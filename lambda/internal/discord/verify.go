@@ -5,11 +5,11 @@
 package discord
 
 import (
-	"bytes"
+	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/disgoorg/disgo/httpserver"
@@ -22,6 +22,12 @@ var ErrInvalidSignature = errors.New("invalid request signature")
 // verifier は署名検証の実装。disgoのものをそのまま使う。
 var verifier httpserver.Verifier = httpserver.DefaultVerifier{}
 
+// Function URLはヘッダ名を小文字にして渡す。
+const (
+	headerSignature = "x-signature-ed25519"
+	headerTimestamp = "x-signature-timestamp"
+)
+
 // VerifiedBody はFunction URLのリクエストの署名を検証し、本文を返す。
 //
 // 本文は受け取ったバイト列のまま扱う。
@@ -31,18 +37,37 @@ func VerifiedBody(publicKey httpserver.PublicKey, req events.LambdaFunctionURLRe
 	if err != nil {
 		return nil, err
 	}
-
-	// disgoのVerifyRequestは署名長と非正規な署名の検査も行うため、
-	// 自前で検証せずhttp.Requestを組み立てて渡す。
-	r, err := asHTTPRequest(req, body)
-	if err != nil {
-		return nil, err
-	}
-	if !httpserver.VerifyRequest(verifier, r, publicKey) {
+	if !verifySignature(publicKey, req, body) {
 		return nil, ErrInvalidSignature
 	}
-
 	return body, nil
+}
+
+// verifySignature は署名が正しいかを返す。
+//
+// 署名長と非正規な署名はed25519.Verifyが弾くので、ここでは検査しない。
+// 一方で公開鍵の長さが違うとed25519.Verifyはpanicするため、そこだけ確認する。
+func verifySignature(publicKey httpserver.PublicKey, req events.LambdaFunctionURLRequest, body []byte) bool {
+	if len(publicKey) != ed25519.PublicKeySize {
+		return false
+	}
+
+	timestamp := req.Headers[headerTimestamp]
+	if timestamp == "" {
+		return false
+	}
+
+	sig, err := hex.DecodeString(req.Headers[headerSignature])
+	if err != nil {
+		return false
+	}
+
+	// 署名の対象はタイムスタンプと本文を連結したもの。
+	msg := make([]byte, 0, len(timestamp)+len(body))
+	msg = append(msg, timestamp...)
+	msg = append(msg, body...)
+
+	return verifier.Verify(publicKey, msg, sig)
 }
 
 // decodeBody はリクエスト本文をバイト列として取り出す。
@@ -57,18 +82,4 @@ func decodeBody(req events.LambdaFunctionURLRequest) ([]byte, error) {
 		return nil, fmt.Errorf("decode base64 body: %w", err)
 	}
 	return body, nil
-}
-
-// asHTTPRequest は署名検証に渡すためだけのhttp.Requestを組み立てる。
-// 検証に使うのは2つのヘッダと本文だけなので、URLやメソッドは形式的なもの。
-func asHTTPRequest(req events.LambdaFunctionURLRequest, body []byte) (*http.Request, error) {
-	r, err := http.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build request for verification: %w", err)
-	}
-
-	// Function URLはヘッダ名を小文字にして渡す。
-	r.Header.Set("X-Signature-Ed25519", req.Headers["x-signature-ed25519"])
-	r.Header.Set("X-Signature-Timestamp", req.Headers["x-signature-timestamp"])
-	return r, nil
 }

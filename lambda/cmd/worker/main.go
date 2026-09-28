@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,9 +25,6 @@ import (
 // tokenLifetime はInteractionのtokenが有効な時間。
 // これを過ぎるとfollowupを送れないので、処理せずに捨てる。
 const tokenLifetime = 15 * time.Minute
-
-// msgFailed は原因を見せられない失敗のときの文面。
-const msgFailed = "処理に失敗しました。時間をおいてもう一度お試しください。"
 
 type app struct {
 	deps *handler.Deps
@@ -73,22 +69,22 @@ func (a *app) process(ctx context.Context, record events.SQSMessage) error {
 		return fmt.Errorf("decode queue message: %w", err)
 	}
 
-	interaction, err := dgo.UnmarshalInteraction(msg.Interaction)
-	if err != nil {
-		// 本文には投稿内容が含まれうるのでログに出さない。
-		return fmt.Errorf("decode interaction: %w", err)
-	}
-
 	// tokenが切れているとfollowupも送れない。処理しても誰にも届かないので捨てる。
 	if age := time.Since(msg.ReceivedAt); age > tokenLifetime {
 		slog.WarnContext(ctx, "discarded an interaction whose token had expired", "age", age.String())
 		return nil
 	}
 
+	interaction, err := dgo.UnmarshalInteraction(msg.Interaction)
+	if err != nil {
+		// 本文には投稿内容が含まれうるのでログに出さない。
+		return fmt.Errorf("decode interaction: %w", err)
+	}
+
 	cmd, ok := handler.Lookup(interaction)
 	if !ok || cmd.Work == nil {
 		// interaction Lambdaとworkerのデプロイがずれている状態。
-		a.notify(ctx, interaction, msgFailed)
+		handler.ReplyBestEffort(ctx, a.deps, interaction, handler.MsgFailed)
 		return fmt.Errorf("no async handler for interaction type %d", interaction.Type())
 	}
 
@@ -97,26 +93,16 @@ func (a *app) process(ctx context.Context, record events.SQSMessage) error {
 		return nil
 	}
 
-	// 想定内の失敗 (権限不足、setup未実行など) は、そのまま実行者に伝えて終える。
+	content, shown := handler.UserMessage(err)
+	handler.ReplyBestEffort(ctx, a.deps, interaction, content)
+
+	// 想定内の失敗 (権限不足、setup未実行など) は、伝えるだけで終える。
 	// 再試行しても結果は変わらない。
-	var userErr *handler.UserError
-	if errors.As(err, &userErr) {
-		a.notify(ctx, interaction, userErr.Message)
+	if shown {
 		return nil
 	}
 
 	// 想定外の失敗。内容は伏せて伝え、メッセージはDLQに送る。
 	slog.ErrorContext(ctx, "async handler failed", "interaction_type", interaction.Type(), "error", err)
-	a.notify(ctx, interaction, msgFailed)
 	return err
-}
-
-// notify は実行者に結果を伝える。
-//
-// ここで失敗しても打つ手が無いためログに残すだけにする。
-// エラーを返して再試行させると、成功した投稿を重複させてしまう。
-func (a *app) notify(ctx context.Context, i dgo.Interaction, content string) {
-	if err := handler.Reply(ctx, a.deps, i, content); err != nil {
-		slog.ErrorContext(ctx, "failed to notify the user", "error", err)
-	}
 }

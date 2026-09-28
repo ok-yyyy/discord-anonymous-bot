@@ -25,7 +25,7 @@ var ping = Command{
 		},
 	},
 	Handle: func(dgo.Interaction) (*dgo.InteractionResponse, error) {
-		resp := discord.Message("pong", true)
+		resp := discord.Message("pong")
 		return &resp, nil
 	},
 }

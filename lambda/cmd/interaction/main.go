@@ -27,9 +27,6 @@ import (
 // 「アプリケーションが応答しませんでした」とだけ出て原因が分からない。
 const msgNotImplemented = "このコマンドは使えません。"
 
-// msgFailed は処理に失敗したときの応答。原因はログに残し、実行者には見せない。
-const msgFailed = "処理に失敗しました。時間をおいてもう一度お試しください。"
-
 type app struct {
 	cfg    *config.Interaction
 	sender *queue.Sender
@@ -86,14 +83,13 @@ func (a *app) route(ctx context.Context, i dgo.Interaction, raw []byte) dgo.Inte
 	if !ok {
 		// Discordに登録済みのコマンドとデプロイ済みのコードがずれている状態。
 		slog.WarnContext(ctx, "no handler for the interaction", "interaction_type", i.Type())
-		return discord.Message(msgNotImplemented, true)
+		return discord.Message(msgNotImplemented)
 	}
 
 	if cmd.Mode == handler.Sync {
 		resp, err := cmd.Handle(i)
 		if err != nil {
-			slog.ErrorContext(ctx, "sync handler failed", "interaction_type", i.Type(), "error", err)
-			return discord.Message(msgFailed, true)
+			return discord.Message(a.userMessage(ctx, i, err, "sync handler failed"))
 		}
 		return *resp
 	}
@@ -106,18 +102,12 @@ func (a *app) enqueue(ctx context.Context, cmd handler.Command, i dgo.Interactio
 	// 不正な入力をworkerまで運ばない。
 	if cmd.Validate != nil {
 		if err := cmd.Validate(i); err != nil {
-			var userErr *handler.UserError
-			if errors.As(err, &userErr) {
-				return discord.Message(userErr.Message, true)
-			}
-			slog.ErrorContext(ctx, "validation failed", "interaction_type", i.Type(), "error", err)
-			return discord.Message(msgFailed, true)
+			return discord.Message(a.userMessage(ctx, i, err, "validation failed"))
 		}
 	}
 
 	if err := a.sender.Send(ctx, groupID(i), i.ID().String(), raw); err != nil {
-		slog.ErrorContext(ctx, "failed to enqueue the interaction", "interaction_type", i.Type(), "error", err)
-		return discord.Message(msgFailed, true)
+		return discord.Message(a.userMessage(ctx, i, err, "failed to enqueue the interaction"))
 	}
 
 	return discord.Ack(i)
@@ -130,4 +120,14 @@ func groupID(i dgo.Interaction) string {
 		return id.String()
 	}
 	return i.ID().String()
+}
+
+// userMessage は実行者に見せる文面を返す。
+// 見せられない失敗はログに残し、実行者には一般的な文面だけを返す。
+func (a *app) userMessage(ctx context.Context, i dgo.Interaction, err error, msg string) string {
+	content, shown := handler.UserMessage(err)
+	if !shown {
+		slog.ErrorContext(ctx, msg, "interaction_type", i.Type(), "error", err)
+	}
+	return content
 }

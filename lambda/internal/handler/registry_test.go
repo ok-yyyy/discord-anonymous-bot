@@ -31,6 +31,9 @@ func TestRegistryEntriesAreConsistent(t *testing.T) {
 		if cmd.Mode == Sync && cmd.Handle == nil {
 			t.Errorf("%s: Sync command has no Handle", name)
 		}
+		if cmd.Mode == Async && cmd.Work == nil {
+			t.Errorf("%s: Async command has no Work", name)
+		}
 		if cmd.Mode == Async && cmd.Handle != nil {
 			t.Errorf("%s: Async command must not have Handle", name)
 		}
@@ -66,19 +69,16 @@ func TestDefinitions(t *testing.T) {
 	}
 }
 
-// definitionOf は名前でコマンド定義の中身を引く。
-func definitionOf(t *testing.T, name string) struct {
+// commandDefinition は登録時に送られる定義のうち、検証したい部分。
+type commandDefinition struct {
 	Contexts                 []int  `json:"contexts"`
 	IntegrationTypes         []int  `json:"integration_types"`
 	DefaultMemberPermissions string `json:"default_member_permissions"`
-} {
-	t.Helper()
+}
 
-	var got struct {
-		Contexts                 []int  `json:"contexts"`
-		IntegrationTypes         []int  `json:"integration_types"`
-		DefaultMemberPermissions string `json:"default_member_permissions"`
-	}
+// definitionOf は名前でコマンド定義の中身を引く。
+func definitionOf(t *testing.T, name string) commandDefinition {
+	t.Helper()
 
 	def := Registry[name].Definition
 	if def == nil {
@@ -88,6 +88,8 @@ func definitionOf(t *testing.T, name string) struct {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	var got commandDefinition
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}

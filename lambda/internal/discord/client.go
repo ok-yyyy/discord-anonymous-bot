@@ -1,7 +1,6 @@
 package discord
 
 import (
-	dgo "github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 )
 
@@ -16,8 +15,6 @@ import (
 func NewRest(botToken string, opts ...rest.ClientConfigOpt) rest.Rest {
 	return rest.New(
 		rest.NewClient(botToken, opts...),
-		rest.WithDefaultAllowedMentions(dgo.AllowedMentions{
-			Parse: []dgo.AllowedMentionType{},
-		}),
+		rest.WithDefaultAllowedMentions(*NoMentions()),
 	)
 }

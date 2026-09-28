@@ -54,7 +54,6 @@ const (
 
 type Command struct {
     Mode       Mode
-    Ephemeral  bool                        // 応答を本人にだけ見せるか
     Definition *discord.SlashCommandCreate // Discord に登録する定義。ボタン等では nil
 
     Validate func(discord.Interaction) error                                 // enqueue 前の検査

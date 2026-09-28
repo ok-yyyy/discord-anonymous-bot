@@ -7,6 +7,8 @@ import (
 	dgo "github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/omit"
+
+	"github.com/ok-yyyy/discord-anonymous-bot/lambda/internal/discord"
 )
 
 // setup はチャンネルに投稿パネルを設置するコマンド。
@@ -43,14 +45,14 @@ func runSetup(ctx context.Context, d *Deps, i dgo.Interaction) error {
 
 	_, err := d.Rest.CreateMessage(channelID, panelMessage(), rest.WithCtx(ctx))
 	if err != nil {
-		if isForbidden(err) {
+		if discord.IsForbidden(err) {
 			return userErrorf("パネルを投稿できませんでした。Botにこのチャンネルへの投稿権限があるか確認してください。")
 		}
 		return fmt.Errorf("post panel: %w", err)
 	}
 
 	// パネルは設置済みなので、通知に失敗してもこの処理は成功として扱う。
-	replyBestEffort(ctx, d, i, "投稿パネルを設置しました。")
+	ReplyBestEffort(ctx, d, i, "投稿パネルを設置しました。")
 	return nil
 }
 

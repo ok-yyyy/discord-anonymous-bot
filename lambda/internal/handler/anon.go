@@ -108,10 +108,10 @@ func runPost(ctx context.Context, d *Deps, i dgo.Interaction) error {
 		Username:  identity.Name,
 		AvatarURL: identity.AvatarURL,
 		// 匿名投稿から@everyoneやロールメンションが飛ばないようにする。
-		AllowedMentions: &dgo.AllowedMentions{Parse: []dgo.AllowedMentionType{}},
+		AllowedMentions: discord.NoMentions(),
 	}, rest.CreateWebhookMessageParams{}, rest.WithCtx(ctx))
 	if err != nil {
-		if isNotFound(err) {
+		if discord.IsNotFound(err) {
 			return userErrorf("投稿先のWebhookが削除されています。`/setup` をやり直してください。")
 		}
 		// 本文がエラーに混ざらないよう、err以外を足さない。
@@ -158,7 +158,7 @@ func deleteStalePanels(ctx context.Context, d *Deps, channelID, keep snowflake.I
 			continue
 		}
 		// 既に消えている場合は何もしなくてよい。
-		if err := d.Rest.DeleteMessage(channelID, m.ID, rest.WithCtx(ctx)); err != nil && !isNotFound(err) {
+		if err := d.Rest.DeleteMessage(channelID, m.ID, rest.WithCtx(ctx)); err != nil && !discord.IsNotFound(err) {
 			slog.ErrorContext(ctx, "failed to delete a stale panel", "error", err)
 		}
 	}

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { parseEnv } from 'node:util';
 import * as cdk from 'aws-cdk-lib/core';
 import { DiscordAnonymousBotStack } from '../lib/discord-anonymous-bot-stack';
 
@@ -61,32 +62,10 @@ function fromProcess(): Record<string, string> {
   return values;
 }
 
+/** .envを読む。ファイルが無ければ空を返す。 */
 function parseEnvFile(file: string): Record<string, string> {
   if (!fs.existsSync(file)) {
     return {};
   }
-
-  const values: Record<string, string> = {};
-  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith('#')) {
-      continue;
-    }
-
-    const separator = trimmed.indexOf('=');
-    if (separator < 1) {
-      continue;
-    }
-
-    const key = trimmed.slice(0, separator).trim();
-    // 値が引用符で囲まれていれば外す。
-    const value = trimmed
-      .slice(separator + 1)
-      .trim()
-      .replace(/^(['"])(.*)\1$/, '$2');
-    if (value !== '') {
-      values[key] = value;
-    }
-  }
-  return values;
+  return parseEnv(fs.readFileSync(file, 'utf8')) as Record<string, string>;
 }

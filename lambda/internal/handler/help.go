@@ -27,7 +27,7 @@ var help = Command{
 		},
 	},
 	Handle: func(dgo.Interaction) (*dgo.InteractionResponse, error) {
-		resp := discord.Embed(helpEmbed(), true)
+		resp := discord.Embed(helpEmbed())
 		return &resp, nil
 	},
 }
