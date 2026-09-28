@@ -60,11 +60,14 @@ AWS_REGION=ap-northeast-1 npx cdk deploy
 `<APPLICATION_ID>` を置き換えて開きます。
 
 ```
-https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot%20applications.commands&permissions=536938496
+https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot%20applications.commands&permissions=536939520
 ```
 
-権限の内訳は **Manage Webhooks / Send Messages / Read Message History** です。
-Manage Webhooksが無いと `/setup` が失敗します。権限を変えたら招待し直してください。
+権限の内訳は **Manage Webhooks / Send Messages / View Channel / Read Message History** です。
+Manage Webhooksが無いと `/setup` が失敗します。
+Read Message Historyが無いと古いパネルを掃除できず、投稿のたびにパネルが増え続けます
+(Discordはエラーではなく空のリストを返すため、気づきにくいです) 。
+権限を変えたら招待し直してください。
 
 ### 3. `.env` を用意する
 
