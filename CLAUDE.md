@@ -154,6 +154,11 @@ npx cdk deploy           # 事前に lambda/ でのビルドが必要
 CDK Toolkit は devDependency なのでグローバルインストールは要らない。
 Makefile は置かない（Windows に `make` が無いため、ビルドも Go で書く）。
 
+順序と実行ディレクトリをまとめた `Taskfile.yml` があり、`task deploy` などで実行できる
+（[go-task](https://taskfile.dev)。`go install` で入るので Go さえあればよい）。
+**ただし必須にはしない。** Taskfile は上のコマンドを並べただけの薄い入口に留め、
+task が無くても個々のコマンドがそのまま動く状態を保つ。
+
 ### デプロイ
 
 **ローカルからの `cdk deploy` のみ。** CI/CD は組まない。

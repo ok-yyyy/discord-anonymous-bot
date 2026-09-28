@@ -95,6 +95,9 @@ npx cdk bootstrap                            # このアカウント・リージ
 npx cdk deploy
 ```
 
+[go-task](https://taskfile.dev) を入れている場合は `task deploy` でビルドとデプロイをまとめて実行できます。
+(`go install github.com/go-task/task/v3/cmd/task@latest`)
+
 出力される `InteractionsEndpointUrl` を控えます。
 
 ### 5. Interactions Endpoint URL を登録する
@@ -138,6 +141,9 @@ npm test                 # スタックの設定値を検証する
 npm run build            # 型チェック
 npx cdk diff
 ```
+
+go-taskを使う場合は `task test` でGoとCDKのテストをまとめて実行できます。
+実行ディレクトリの移動を含めてまとめてあるだけで、中身は上のコマンドと同じです。
 
 ## 更新するとき
 

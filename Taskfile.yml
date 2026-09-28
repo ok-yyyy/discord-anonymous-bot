@@ -1,0 +1,41 @@
+# go-task (https://taskfile.dev) のタスク定義。
+#
+#   go install github.com/go-task/task/v3/cmd/task@latest
+#
+# 中身は README に書いてあるコマンドそのままで、順序と実行ディレクトリをまとめているだけ。
+# task が入っていなくても、個々のコマンドは従来どおり動く。
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - cmd: task -l
+    silent: true
+
+  # ビルドを同じタスクに含めて、古いバイナリをデプロイする事故を防ぐ。
+  deploy:
+    desc: ビルドしてデプロイする
+    cmds:
+      - task: build
+      - cmd: npx cdk deploy
+
+  test:
+    desc: GoとCDKのテストを実行する
+    cmds:
+      - task: test:go
+      - cmd: npm test
+
+  # lambda/ で動かすものは内部タスクに分ける。
+  # 実行ディレクトリを変えられるのはタスク単位の dir: だけで、
+  # コマンド単位に書いても黙って無視される。
+  build:
+    internal: true
+    dir: lambda
+    cmds:
+      - go run ./tools/build
+
+  test:go:
+    internal: true
+    dir: lambda
+    cmds:
+      - go test ./...
