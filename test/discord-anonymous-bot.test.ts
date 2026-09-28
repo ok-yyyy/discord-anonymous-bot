@@ -128,6 +128,19 @@ describe('DiscordAnonymousBotStack', () => {
     });
   });
 
+  // どのリソースがこのBotのものかを請求やコンソールから辿れるようにする。
+  // タグに対応しないリソース (Lambda::Url など) はCDKが読み飛ばす。
+  test.each([
+    'AWS::Lambda::Function',
+    'AWS::SQS::Queue',
+    'AWS::Logs::LogGroup',
+    'AWS::IAM::Role',
+  ])('%s にアプリ名のタグが付く', (type) => {
+    template.allResourcesProperties(type, {
+      Tags: Match.arrayWith([{ Key: 'app', Value: 'discord-anonymous-bot' }]),
+    });
+  });
+
   test('ログの保持期間を指定する', () => {
     template.allResourcesProperties('AWS::Logs::LogGroup', {
       RetentionInDays: 30,

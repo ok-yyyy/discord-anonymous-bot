@@ -199,6 +199,9 @@ Lambda のコードだけ直すときも `cdk deploy` でよい（`aws lambda up
 - `Runtime.PROVIDED_AL2023` / `Architecture.ARM_64` / ハンドラ名 `bootstrap`。
 - Function URL は `authType: NONE`（Discord は署名で認証するため）。
   **必ず Lambda 側で署名検証すること。**
+- **全リソースに `app: discord-anonymous-bot` タグを付ける**（`Tags.of(this)` で伝播）。
+  請求やコンソールから、このアプリのリソースを辿れるようにする。
+  タグに対応しないリソース（`Lambda::Url` など）は CDK が読み飛ばす。
 - SQS は FIFO。`MessageGroupId` = チャンネル ID、`MessageDeduplicationId` = interaction ID。
   同一チャンネルへの投稿は直列化されるが、個人利用の規模では問題にならない。
 

@@ -49,9 +49,23 @@ const MEMORY_SIZE = 256;
  * */
 const BUILD_DIR = path.join(__dirname, '..', 'lambda', 'build');
 
+/**
+ * スタック内の全リソースに付けるタグ。
+ * どのリソースがこのBotのものかを、請求やコンソールから辿れるようにする。
+ */
+const TAGS: Record<string, string> = {
+  app: 'discord-anonymous-bot',
+};
+
 export class DiscordAnonymousBotStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DiscordAnonymousBotStackProps) {
     super(scope, id, props);
+
+    // Aspectとして配下のリソースへ伝播する。タグに対応しないリソース
+    // (Lambda::Url など) は自動的に読み飛ばされる。
+    for (const [key, value] of Object.entries(TAGS)) {
+      cdk.Tags.of(this).add(key, value);
+    }
 
     const queue = this.interactionQueue();
 
