@@ -9,6 +9,7 @@ import (
 
 	dgo "github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 
 	"github.com/ok-yyyy/discord-anonymous-bot/lambda/internal/anon"
 	"github.com/ok-yyyy/discord-anonymous-bot/lambda/internal/discord"
@@ -24,6 +25,10 @@ const (
 
 	// maxMessageLength はDiscordのメッセージ本文の上限。
 	maxMessageLength = 2000
+
+	// panelLookback はパネルを掃除するときに遡って調べるメッセージ数。
+	// 投稿ごとに張り替えるので、古いパネルは直近に収まる。
+	panelLookback = 50
 )
 
 // openModal はパネルのボタンを押したときに入力欄を開く。
@@ -120,24 +125,54 @@ func runPost(ctx context.Context, d *Deps, i dgo.Interaction) error {
 }
 
 // refreshPanel は投稿パネルを作り直し、チャンネルの一番下に置く。
+//
+// 新しいパネルを作ってから、それ以外のパネルを消す。
+// 逆順にすると、削除に成功して作成に失敗した場合にパネルが1つも無い状態になり、
+// /setup をやり直すまで投稿できなくなる。
 func refreshPanel(ctx context.Context, d *Deps, i dgo.Interaction) {
-	modal, ok := i.(dgo.ModalSubmitInteraction)
-	if !ok || modal.Message == nil {
-		// ボタン以外から開かれたモーダル。消すべきパネルが分からない。
-		return
-	}
-
 	channelID := i.Channel().ID()
-	if _, err := d.Rest.CreateMessage(channelID, panelMessage(), rest.WithCtx(ctx)); err != nil {
+
+	created, err := d.Rest.CreateMessage(channelID, panelMessage(), rest.WithCtx(ctx))
+	if err != nil {
 		slog.ErrorContext(ctx, "failed to post a new panel", "error", err)
 		return
 	}
 
-	// 既に消えている場合 (古いパネルから開かれた等) は何もしなくてよい。
-	err := d.Rest.DeleteMessage(channelID, modal.Message.ID, rest.WithCtx(ctx))
-	if err != nil && !isNotFound(err) {
-		slog.ErrorContext(ctx, "failed to delete the old panel", "error", err)
+	deleteStalePanels(ctx, d, channelID, created.ID)
+}
+
+// deleteStalePanels は直近のメッセージから、keep以外のパネルを消す。
+//
+// モーダルを開いたメッセージだけを消すやり方だと、同じパネルから複数人が
+// モーダルを開いたときにパネルが増える。後から送信した側の削除は404になる一方で、
+// 新しいパネルはそれぞれ作られるため。直近をまとめて掃除して1枚に収束させる。
+func deleteStalePanels(ctx context.Context, d *Deps, channelID, keep snowflake.ID) {
+	messages, err := d.Rest.GetMessages(channelID, 0, 0, 0, panelLookback, rest.WithCtx(ctx))
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to list messages while refreshing the panel", "error", err)
+		return
 	}
+
+	for _, m := range messages {
+		if m.ID == keep || !isOwnPanel(d, m) {
+			continue
+		}
+		// 既に消えている場合は何もしなくてよい。
+		if err := d.Rest.DeleteMessage(channelID, m.ID, rest.WithCtx(ctx)); err != nil && !isNotFound(err) {
+			slog.ErrorContext(ctx, "failed to delete a stale panel", "error", err)
+		}
+	}
+}
+
+// isOwnPanel はBot自身が投稿したパネルかを返す。
+//
+// 匿名メッセージはWebhook経由で投稿しているため、WebhookIDで必ず除外する。
+// これを忘れると利用者の投稿を消してしまう。
+//
+// Bot自身が投稿する非ephemeralなメッセージはパネルだけなので、それ以上は見ない。
+// パネル以外を投稿するようになったら、ここに判定を足す必要がある。
+func isOwnPanel(d *Deps, m dgo.Message) bool {
+	return m.WebhookID == nil && m.Author.ID == d.ApplicationID
 }
 
 // messageOf はモーダルの入力値を取り出す。

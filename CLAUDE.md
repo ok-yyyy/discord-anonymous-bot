@@ -287,7 +287,9 @@ sum := sha256.Sum256([]byte(userID + ":" + date + ":" + salt))   // 32 バイト
 ### Bot に必要な権限
 
 OAuth2 スコープ `bot` + `applications.commands`、権限は **Manage Webhooks / Send Messages /
-View Channel** = `permissions=536873984`。Manage Webhooks が無いと `/setup` が失敗する。
+View Channel / Read Message History** = `permissions=536939520`。
+Manage Webhooks が無いと `/setup` が失敗する。**Read Message History が無いと
+`GetMessages` がエラーではなく空を返す**ので、古いパネルを掃除できずに増え続ける。
 権限を変えたら招待 URL も更新して入れ直す必要がある。
 
 ### `/setup`
@@ -319,10 +321,16 @@ View Channel** = `permissions=536873984`。Manage Webhooks が無いと `/setup`
 - **Webhook が消えていても再作成しない。** 「`/setup` をやり直してください」と followup で伝える
   （勝手に作り直すと権限の無いチャンネルに投稿しうる）。
 - 投稿後、**パネルを作り直してチャンネルの一番下に置く**。投稿が増えるとパネルが上に
-  流れてボタンを探しにくくなるため。旧パネルの ID は `ModalSubmitInteraction.Message`
-  から取れるので保存は要らない。
-  **先に新パネルを作ってから旧パネルを消す。** 逆順だと、削除後に作成が失敗した場合に
-  パネルが 1 つも無い状態になり、`/setup` をやり直すまで投稿できなくなる。
+  流れてボタンを探しにくくなるため。
+  **先に新パネルを作ってから、直近のメッセージを引いて他のパネルを消す。**
+  逆順だと、削除後に作成が失敗した場合にパネルが 1 つも無い状態になり、`/setup` を
+  やり直すまで投稿できなくなる。
+  モーダルを開いたメッセージだけを消すやり方は使わない。同じパネルから複数人が
+  モーダルを開くと、後から送信した側の削除が 404 になる一方で新パネルはそれぞれ
+  作られ、パネルが増える。まとめて掃除して 1 枚に収束させる。
+- **掃除の対象から Webhook 投稿を必ず除外する**（`Message.WebhookID`）。
+  匿名メッセージは自アプリの Webhook で投稿しているため、除外しないと
+  利用者の投稿を消してしまう。
 - **投稿が済んだ後の失敗（パネルの張り替え、followup）はログに残すだけにする。**
   エラーを返すと DLQ 行きになるうえ、再実行されれば投稿が重複する。
 - **worker はどんな経路で失敗しても必ず followup を返す。** deferred のまま放置すると

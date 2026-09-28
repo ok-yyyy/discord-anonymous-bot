@@ -377,10 +377,38 @@ func TestRunPostErrorDoesNotLeakContent(t *testing.T) {
 	}
 }
 
-// 投稿後はパネルを作り直して一番下に置く。
+// panelMsg はBot自身が投稿したパネルのJSON。
+func panelMsg(id string) string {
+	return `{"id":"` + id + `","channel_id":"4","type":0,"content":"",` +
+		`"timestamp":"2026-09-18T12:00:00Z",` +
+		`"author":{"id":"999","username":"bot","discriminator":"0"}}`
+}
+
+// webhookMsg は匿名投稿のJSON。webhook_idが入る。
+func webhookMsg(id string) string {
+	return `{"id":"` + id + `","channel_id":"4","type":0,"content":"ひみつ",` +
+		`"timestamp":"2026-09-18T12:00:00Z","webhook_id":"77",` +
+		`"author":{"id":"77","username":"しずかなうさぎ","discriminator":"0"}}`
+}
+
+// userMsg は他の利用者のメッセージのJSON。
+func userMsg(id string) string {
+	return `{"id":"` + id + `","channel_id":"4","type":0,"content":"やあ",` +
+		`"timestamp":"2026-09-18T12:00:00Z",` +
+		`"author":{"id":"123","username":"someone","discriminator":"0"}}`
+}
+
+func history(msgs ...string) string {
+	return "[" + strings.Join(msgs, ",") + "]"
+}
+
+// 投稿後はパネルを作り直し、古いパネルをまとめて消して1枚に収束させる。
 func TestRunPostRefreshesPanel(t *testing.T) {
 	d, s := newDeps(map[string]string{
-		"GET /channels/4/webhooks": ownWebhook(),
+		"GET /channels/4/webhooks":  ownWebhook(),
+		"POST /channels/4/messages": panelMsg("900"),
+		// 同じパネルから複数人がモーダルを開くと、古いパネルが複数残る。
+		"GET /channels/4/messages": history(panelMsg("900"), panelMsg("801"), panelMsg("802")),
 	}, nil)
 
 	if err := runPost(context.Background(), d, modalSubmit(t, "こんにちは")); err != nil {
@@ -388,29 +416,60 @@ func TestRunPostRefreshesPanel(t *testing.T) {
 	}
 
 	created := s.indexOf(http.MethodPost, "/channels/4/messages")
-	deleted := s.indexOf(http.MethodDelete, "/channels/4/messages/"+panelMessageID)
 	if created < 0 {
 		t.Fatalf("new panel was not posted; requests = %+v", s.requests)
 	}
-	if deleted < 0 {
-		t.Fatalf("old panel was not deleted; requests = %+v", s.requests)
-	}
-
 	// 先に消すと、作成に失敗したときにパネルが1つも無い状態になる。
-	if created > deleted {
-		t.Error("deleted the old panel before creating the new one")
+	for _, id := range []string{"801", "802"} {
+		deleted := s.indexOf(http.MethodDelete, "/channels/4/messages/"+id)
+		if deleted < 0 {
+			t.Errorf("stale panel %s was not deleted; requests = %+v", id, s.requests)
+			continue
+		}
+		if created > deleted {
+			t.Errorf("deleted stale panel %s before creating the new one", id)
+		}
 	}
-
+	// 今作ったパネルは消さない。
+	if s.indexOf(http.MethodDelete, "/channels/4/messages/900") >= 0 {
+		t.Error("deleted the panel it had just created")
+	}
 	// 匿名投稿より後に置かないと、パネルが一番下に来ない。
 	if posted := s.indexOf(http.MethodPost, "/webhooks/77/wh-token"); posted > created {
 		t.Error("posted the panel before the anonymous message")
 	}
 }
 
+// 匿名メッセージはWebhook経由なので、掃除の対象にしてはいけない。
+func TestRunPostNeverDeletesAnonymousMessages(t *testing.T) {
+	d, s := newDeps(map[string]string{
+		"GET /channels/4/webhooks":  ownWebhook(),
+		"POST /channels/4/messages": panelMsg("900"),
+		"GET /channels/4/messages": history(
+			panelMsg("900"), webhookMsg("701"), webhookMsg("702"), userMsg("601"), panelMsg("801")),
+	}, nil)
+
+	if err := runPost(context.Background(), d, modalSubmit(t, "こんにちは")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{"701", "702", "601"} {
+		if s.indexOf(http.MethodDelete, "/channels/4/messages/"+id) >= 0 {
+			t.Errorf("deleted message %s, which is not a panel", id)
+		}
+	}
+	if s.indexOf(http.MethodDelete, "/channels/4/messages/801") < 0 {
+		t.Error("did not delete the stale panel")
+	}
+}
+
 // 新パネルを作れなかったときは、古いパネルを消さずに残す。
 func TestRunPostKeepsOldPanelWhenCreateFails(t *testing.T) {
 	d, s := newDeps(
-		map[string]string{"GET /channels/4/webhooks": ownWebhook()},
+		map[string]string{
+			"GET /channels/4/webhooks": ownWebhook(),
+			"GET /channels/4/messages": history(panelMsg("801")),
+		},
 		map[string]int{"POST /channels/4/messages": http.StatusForbidden},
 	)
 
@@ -418,16 +477,20 @@ func TestRunPostKeepsOldPanelWhenCreateFails(t *testing.T) {
 	if err := runPost(context.Background(), d, modalSubmit(t, "こんにちは")); err != nil {
 		t.Fatalf("err = %v, want nil so the message is not retried", err)
 	}
-	if s.indexOf(http.MethodDelete, "/channels/4/messages/"+panelMessageID) >= 0 {
+	if s.indexOf(http.MethodDelete, "/channels/4/messages/801") >= 0 {
 		t.Error("deleted the old panel even though the new one could not be posted")
 	}
 }
 
-// パネルの張り替えに失敗しても、投稿は成功として扱う。再実行すると二重投稿になる。
-func TestRunPostSucceedsWhenPanelDeleteFails(t *testing.T) {
+// 掃除に失敗しても、投稿は成功として扱う。再実行すると二重投稿になる。
+func TestRunPostSucceedsWhenPanelCleanupFails(t *testing.T) {
 	d, _ := newDeps(
-		map[string]string{"GET /channels/4/webhooks": ownWebhook()},
-		map[string]int{"DELETE /channels/4/messages/" + panelMessageID: http.StatusNotFound},
+		map[string]string{
+			"GET /channels/4/webhooks":  ownWebhook(),
+			"POST /channels/4/messages": panelMsg("900"),
+			"GET /channels/4/messages":  history(panelMsg("900"), panelMsg("801")),
+		},
+		map[string]int{"DELETE /channels/4/messages/801": http.StatusNotFound},
 	)
 
 	if err := runPost(context.Background(), d, modalSubmit(t, "こんにちは")); err != nil {
@@ -435,16 +498,21 @@ func TestRunPostSucceedsWhenPanelDeleteFails(t *testing.T) {
 	}
 }
 
-// ボタン以外から開かれた場合は、消すべきパネルが分からないので触らない。
-func TestRunPostWithoutPanelDoesNotTouchMessages(t *testing.T) {
+// 履歴が空のときは何も消さない。
+// 「メッセージ履歴を読む」権限が無い場合、Discordはエラーではなく空を返す。
+func TestRunPostDeletesNothingWhenHistoryIsEmpty(t *testing.T) {
 	d, s := newDeps(map[string]string{
-		"GET /channels/4/webhooks": ownWebhook(),
+		"GET /channels/4/webhooks":  ownWebhook(),
+		"POST /channels/4/messages": panelMsg("900"),
+		"GET /channels/4/messages":  `[]`,
 	}, nil)
 
-	if err := runPost(context.Background(), d, modalSubmitFrom(t, "こんにちは", false)); err != nil {
+	if err := runPost(context.Background(), d, modalSubmit(t, "こんにちは")); err != nil {
 		t.Fatal(err)
 	}
-	if s.indexOf(http.MethodPost, "/channels/4/messages") >= 0 {
-		t.Error("posted a panel even though the source message is unknown")
+	for _, r := range s.requests {
+		if r.Method == http.MethodDelete {
+			t.Errorf("deleted %s even though the history was empty", r.Path)
+		}
 	}
 }
