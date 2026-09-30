@@ -91,13 +91,14 @@ func runPost(ctx context.Context, d *Deps, i dgo.Interaction) error {
 	}
 
 	identity := anon.Derive(i.User().ID.String(), d.Now(), d.Salt)
+	// 匿名メッセージとパネルの順序を保つためにWaitを付ける。
 	_, err = d.Rest.CreateWebhookMessage(webhook.ID(), webhook.Token, dgo.WebhookMessageCreate{
 		Content:   messageOf(i),
 		Username:  identity.Name,
 		AvatarURL: identity.AvatarURL,
 		// 匿名投稿から@everyoneやロールメンションが飛ばないようにする。
 		AllowedMentions: discord.NoMentions(),
-	}, rest.CreateWebhookMessageParams{}, rest.WithCtx(ctx))
+	}, rest.CreateWebhookMessageParams{Wait: true}, rest.WithCtx(ctx))
 	if err != nil {
 		if discord.IsNotFound(err) {
 			return userErrorf("投稿先のWebhookが削除されています。`/setup` をやり直してください。")

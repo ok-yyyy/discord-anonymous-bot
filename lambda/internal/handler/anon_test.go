@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ const (
 type recordedRequest struct {
 	Method string
 	Path   string
+	Query  url.Values
 	Body   map[string]any
 }
 
@@ -46,7 +48,7 @@ func (s *stub) RoundTrip(r *http.Request) (*http.Response, error) {
 
 	path := strings.TrimPrefix(r.URL.Path, "/api/v10")
 	key := r.Method + " " + path
-	s.requests = append(s.requests, recordedRequest{Method: r.Method, Path: path, Body: body})
+	s.requests = append(s.requests, recordedRequest{Method: r.Method, Path: path, Query: r.URL.Query(), Body: body})
 
 	status := http.StatusOK
 	if s.statuses != nil {
@@ -245,6 +247,10 @@ func TestRunPostUsesAnonymousIdentity(t *testing.T) {
 	req := s.find(http.MethodPost, "/webhooks/77/wh-token")
 	if req == nil {
 		t.Fatalf("webhook was not executed; requests = %+v", s.requests)
+	}
+	// 作成完了を待たないと、後から作るパネルが先に並ぶことがある。
+	if req.Query.Get("wait") != "true" {
+		t.Errorf("wait = %q, want true", req.Query.Get("wait"))
 	}
 	if req.Body["content"] != "こんにちは" {
 		t.Errorf("content = %v", req.Body["content"])
