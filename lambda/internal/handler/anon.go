@@ -81,19 +81,7 @@ func validateMessage(i dgo.Interaction) error {
 }
 
 func runPost(ctx context.Context, d *Deps, i dgo.Interaction) error {
-	channelID := i.Channel().ID()
-	userID := i.User().ID
-	content := messageOf(i)
-
-	slog.Info("anonymous message received",
-		slog.Any("guild_id", i.GuildID()),
-		slog.Any("channel_id", channelID),
-		slog.Any("user_id", userID),
-		slog.String("user_name", i.User().EffectiveName()),
-		slog.String("content", content),
-	)
-
-	webhook, err := findWebhook(ctx, d, channelID)
+	webhook, err := findWebhook(ctx, d, i.Channel().ID())
 	if err != nil {
 		return err
 	}
@@ -102,9 +90,9 @@ func runPost(ctx context.Context, d *Deps, i dgo.Interaction) error {
 		return userErrorf("このチャンネルの投稿設定が見つかりません。`/setup` をやり直してください。")
 	}
 
-	identity := anon.Derive(userID.String(), d.Now(), d.Salt)
+	identity := anon.Derive(i.User().ID.String(), d.Now(), d.Salt)
 	_, err = d.Rest.CreateWebhookMessage(webhook.ID(), webhook.Token, dgo.WebhookMessageCreate{
-		Content:   content,
+		Content:   messageOf(i),
 		Username:  identity.Name,
 		AvatarURL: identity.AvatarURL,
 		// 匿名投稿から@everyoneやロールメンションが飛ばないようにする。

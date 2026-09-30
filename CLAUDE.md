@@ -195,11 +195,6 @@ Lambda のコードだけ直すときも `cdk deploy` でよい（`aws lambda up
   `caarlos0/env/v11`、`joho/godotenv`。追加したくなったら、まず標準ライブラリで
   書けないか検討する。
 - エラーは `fmt.Errorf("...: %w", err)` でラップして返す。ログ出力はハンドラ最上位だけ。
-- ログは `log/slog` の JSON ハンドラ。**salt とトークンは絶対に出さない。**
-  ユーザー ID・表示名・メッセージ本文は、**匿名投稿の監査ログとして意図的に記録している**
-  （`runPost` の `anonymous message received`）。それ以外の箇所では出さない。
-  この記録があるため、匿名性は「同じサーバーの他の参加者に対するもの」であり
-  運営者に対するものではない。変更するときは `docs/privacy-policy.md` も直す。
 - `internal/` 配下はテスト必須。Discord REST は `rest.WithHTTPClient` に stub を渡してテストする。
 
 ### CDK (TypeScript)
@@ -393,8 +388,9 @@ Webhook の一覧 / 作成、パネル投稿、コマンド登録だけ。
 
 - Gateway（WebSocket）接続。HTTP interaction のみ扱う。
 - パネルやメッセージ ID の保存。Webhook は毎回 Discord から引き直す。
-- 投稿ログを検索・集計できる形で保存すること（DynamoDB 等）。監査用の記録は
-  CloudWatch Logs に出しており（保持 1 か月）、これ以上の永続化はしない。
+- 投稿者と投稿内容の記録。**誰が何を投稿したかはログにも残さない。**
+  荒れたときはメッセージの削除とパネルの撤去で対処する前提。
+  管理者が投稿者を逆算する機能も、同じ理由で入れない。
 - **濫用対策**（レート制限・連投抑止・ブロック）。永続ストアが無いため実装できない。
 - **監視・アラート**（DLQ 通知、CloudWatch Alarm）。問題が起きたらログを直接見る。
 - **ローカル実行環境**（署名付きリクエストのテストハーネス、SAM Local 等）。
