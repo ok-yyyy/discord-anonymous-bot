@@ -36,9 +36,8 @@ const (
 // モーダルはdeferredにできないため必ず同期で返す。
 // ここで外部I/Oをすると3秒を超えてInteractionごと失敗する。
 var openModal = Command{
-	Mode: Sync,
-	Handle: func(dgo.Interaction) (*dgo.InteractionResponse, error) {
-		resp := discord.Modal(dgo.ModalCreate{
+	Respond: func(dgo.Interaction) (dgo.InteractionResponse, error) {
+		return discord.Modal(dgo.ModalCreate{
 			CustomID: customIDSubmit,
 			Title:    "匿名メッセージ",
 			Components: []dgo.LayoutComponent{
@@ -53,19 +52,22 @@ var openModal = Command{
 					},
 				},
 			},
-		})
-		return &resp, nil
+		}), nil
 	},
 }
 
 // postAnonymousMessage はモーダルの内容を匿名で投稿する。
 var postAnonymousMessage = Command{
-	Mode: Async,
 	// MODAL_SUBMITなので無言ackになる。投稿されたメッセージとパネルの
 	// 張り替えで結果が分かるため、完了の通知も出さない。
 	// 失敗したときだけfollowupで伝える。
-	Validate: validateMessage,
-	Work:     runPost,
+	Respond: func(i dgo.Interaction) (dgo.InteractionResponse, error) {
+		if err := validateMessage(i); err != nil {
+			return dgo.InteractionResponse{}, err
+		}
+		return discord.Ack(i), nil
+	},
+	Work: runPost,
 }
 
 // validateMessage はSQSに積む前の検査。不正な入力をworkerまで運ばない。
@@ -109,7 +111,7 @@ func runPost(ctx context.Context, d *Deps, i dgo.Interaction) error {
 
 	// 投稿が済んだのでここから先は失敗してもこの処理は成功として扱う。
 	// エラーを返すと再実行され、投稿が重複する。
-	refreshPanel(ctx, d, i)
+	refreshPanel(ctx, d, i.Channel().ID())
 	return nil
 }
 
@@ -118,9 +120,7 @@ func runPost(ctx context.Context, d *Deps, i dgo.Interaction) error {
 // 新しいパネルを作ってから、それ以外のパネルを消す。
 // 逆順にすると、削除に成功して作成に失敗した場合にパネルが1つも無い状態になり、
 // /setup をやり直すまで投稿できなくなる。
-func refreshPanel(ctx context.Context, d *Deps, i dgo.Interaction) {
-	channelID := i.Channel().ID()
-
+func refreshPanel(ctx context.Context, d *Deps, channelID snowflake.ID) {
 	created, err := d.Rest.CreateMessage(channelID, panelMessage(), rest.WithCtx(ctx))
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to post a new panel", "error", err)

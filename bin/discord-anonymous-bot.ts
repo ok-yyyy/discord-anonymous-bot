@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { parseEnv } from 'node:util';
 import * as cdk from 'aws-cdk-lib/core';
 import { DiscordAnonymousBotStack } from '../lib/discord-anonymous-bot-stack';
 
@@ -33,14 +32,16 @@ new DiscordAnonymousBotStack(app, 'DiscordAnonymousBotStack', {
 });
 
 /**
- * .envと環境変数から設定を読む。環境変数が設定されていればそちらを優先する。
+ * .envと環境変数から設定を読む。loadEnvFileは既に設定されている環境変数を上書きしないので、そちらが優先される。
  *
  * 足りない値があればsynthの時点で止める。空のままdeployすると、署名検証が通らないLambdaが動き続けることになる。
  */
 function loadEnv(): Record<(typeof REQUIRED_KEYS)[number], string> {
-  const values = { ...parseEnvFile(ENV_FILE), ...fromProcess() };
+  if (fs.existsSync(ENV_FILE)) {
+    process.loadEnvFile(ENV_FILE);
+  }
 
-  const missing = REQUIRED_KEYS.filter((key) => !values[key]);
+  const missing = REQUIRED_KEYS.filter((key) => !process.env[key]?.trim());
   if (missing.length > 0) {
     throw new Error(
       `必要な環境変数が設定されていません: ${missing.join(', ')}\n` +
@@ -48,24 +49,5 @@ function loadEnv(): Record<(typeof REQUIRED_KEYS)[number], string> {
     );
   }
 
-  return values as Record<(typeof REQUIRED_KEYS)[number], string>;
-}
-
-function fromProcess(): Record<string, string> {
-  const values: Record<string, string> = {};
-  for (const key of REQUIRED_KEYS) {
-    const value = process.env[key]?.trim();
-    if (value) {
-      values[key] = value;
-    }
-  }
-  return values;
-}
-
-/** .envを読む。ファイルが無ければ空を返す。 */
-function parseEnvFile(file: string): Record<string, string> {
-  if (!fs.existsSync(file)) {
-    return {};
-  }
-  return parseEnv(fs.readFileSync(file, 'utf8')) as Record<string, string>;
+  return process.env as Record<(typeof REQUIRED_KEYS)[number], string>;
 }

@@ -1,7 +1,7 @@
 // Command worker はSQSに積まれたInteractionを処理する。
 //
 // Discord APIを呼ぶ処理はすべてここで行う。
-// interaction Lambdaは既に「考え中…」を返しているので、結果はfollowupで伝える。
+// interaction Lambdaは既にackを返しているので、結果はhandler.ReplyBestEffortで伝える。
 package main
 
 import (

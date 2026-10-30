@@ -33,6 +33,25 @@ func setupCommand(t *testing.T) dgo.Interaction {
 	return i
 }
 
+// スラッシュコマンドはtype 6でackできないので「考え中…」を実行者にだけ見せる。
+func TestSetupAcksWithEphemeralThinking(t *testing.T) {
+	resp, err := setup.Respond(setupCommand(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Type != dgo.InteractionResponseTypeDeferredCreateMessage {
+		t.Fatalf("type = %d, want %d", resp.Type, dgo.InteractionResponseTypeDeferredCreateMessage)
+	}
+
+	data, ok := resp.Data.(dgo.MessageCreate)
+	if !ok {
+		t.Fatalf("data = %T, want MessageCreate", resp.Data)
+	}
+	if data.Flags&dgo.MessageFlagEphemeral == 0 {
+		t.Errorf("flags = %d, want the ephemeral flag to be set", data.Flags)
+	}
+}
+
 func TestRunSetupCreatesWebhookAndPanel(t *testing.T) {
 	d, s := newDeps(map[string]string{
 		"GET /channels/4/webhooks": `[]`,

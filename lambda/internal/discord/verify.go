@@ -1,6 +1,7 @@
 // Package discord はdisgoでそのまま扱えない部分を補う。
 //
-// 具体的にはLambda Function URLのリクエストをdisgoの署名検証に渡せる形へ変換する。
+// 具体的にはFunction URLのリクエストの署名検証、応答の組み立て、
+// メンションの既定を反転させたRESTクライアント、RESTエラーの判定を持つ。
 // Interactionの型やREST呼び出しはdisgoのものを直接使い、ここで包み直さない。
 package discord
 
@@ -12,15 +13,11 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/disgoorg/disgo/httpserver"
 )
 
 // ErrInvalidSignature は署名検証に失敗したことを表す。
 // このエラーにはHTTP 401を返す。
 var ErrInvalidSignature = errors.New("invalid request signature")
-
-// verifier は署名検証の実装。disgoのものをそのまま使う。
-var verifier httpserver.Verifier = httpserver.DefaultVerifier{}
 
 // Function URLはヘッダ名を小文字にして渡す。
 const (
@@ -32,7 +29,7 @@ const (
 //
 // 本文は受け取ったバイト列のまま扱う。
 // JSONとして読み直して組み立てると署名が合わなくなる。
-func VerifiedBody(publicKey httpserver.PublicKey, req events.LambdaFunctionURLRequest) ([]byte, error) {
+func VerifiedBody(publicKey ed25519.PublicKey, req events.LambdaFunctionURLRequest) ([]byte, error) {
 	body, err := decodeBody(req)
 	if err != nil {
 		return nil, err
@@ -47,7 +44,7 @@ func VerifiedBody(publicKey httpserver.PublicKey, req events.LambdaFunctionURLRe
 //
 // 署名長と非正規な署名はed25519.Verifyが弾くので、ここでは検査しない。
 // 一方で公開鍵の長さが違うとed25519.Verifyはpanicするため、そこだけ確認する。
-func verifySignature(publicKey httpserver.PublicKey, req events.LambdaFunctionURLRequest, body []byte) bool {
+func verifySignature(publicKey ed25519.PublicKey, req events.LambdaFunctionURLRequest, body []byte) bool {
 	if len(publicKey) != ed25519.PublicKeySize {
 		return false
 	}
@@ -67,7 +64,7 @@ func verifySignature(publicKey httpserver.PublicKey, req events.LambdaFunctionUR
 	msg = append(msg, timestamp...)
 	msg = append(msg, body...)
 
-	return verifier.Verify(publicKey, msg, sig)
+	return ed25519.Verify(publicKey, msg, sig)
 }
 
 // decodeBody はリクエスト本文をバイト列として取り出す。
