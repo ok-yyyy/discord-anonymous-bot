@@ -1,6 +1,7 @@
 // Package discord はdisgoでそのまま扱えない部分を補う。
 //
-// 具体的にはLambda Function URLのリクエストの署名を検証し、本文を取り出す。
+// 具体的にはFunction URLのリクエストの署名検証、応答の組み立て、
+// メンションの既定を反転させたRESTクライアント、RESTエラーの判定を持つ。
 // Interactionの型やREST呼び出しはdisgoのものを直接使い、ここで包み直さない。
 package discord
 

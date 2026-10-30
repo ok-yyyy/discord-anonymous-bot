@@ -2,7 +2,7 @@
 //
 // interaction LambdaとworkerLambdaは同じ表を参照する。
 // 前者はRespondで応答を決め、Workがあればその前にSQSへ積む。後者は積まれたものを処理する。
-// 新しいコマンドを足すときはRegistryに1行足す。
+// 新しいコマンドを足すときはregistryに1行足す。
 package handler
 
 import (
@@ -48,10 +48,10 @@ type Command struct {
 	Work func(context.Context, *Deps, dgo.Interaction) error
 }
 
-// Registry はInteractionの識別子から処理を引く表。
+// registry はInteractionの識別子から処理を引く表。
 //
 // キーはスラッシュコマンド名、またはコンポーネント/モーダルのcustom_id。
-var Registry = map[string]Command{
+var registry = map[string]Command{
 	"ping":         ping,
 	"help":         help,
 	"setup":        setup,
@@ -61,7 +61,7 @@ var Registry = map[string]Command{
 
 // Lookup はInteractionに対応する処理を返す。
 func Lookup(i dgo.Interaction) (Command, bool) {
-	cmd, ok := Registry[identifier(i)]
+	cmd, ok := registry[identifier(i)]
 	return cmd, ok
 }
 
@@ -83,9 +83,9 @@ func identifier(i dgo.Interaction) string {
 //
 // mapの反復順は不定なので、登録内容が毎回同じになるよう名前順に並べる。
 func Definitions() []dgo.ApplicationCommandCreate {
-	defs := make([]dgo.ApplicationCommandCreate, 0, len(Registry))
-	for _, name := range slices.Sorted(maps.Keys(Registry)) {
-		if def := Registry[name].Definition; def != nil {
+	defs := make([]dgo.ApplicationCommandCreate, 0, len(registry))
+	for _, name := range slices.Sorted(maps.Keys(registry)) {
+		if def := registry[name].Definition; def != nil {
 			defs = append(defs, *def)
 		}
 	}

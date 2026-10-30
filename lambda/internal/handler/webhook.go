@@ -41,21 +41,21 @@ func findWebhook(ctx context.Context, d *Deps, channelID snowflake.ID) (*dgo.Inc
 }
 
 // ensureWebhook はWebhookが無ければ作る。
-func ensureWebhook(ctx context.Context, d *Deps, channelID snowflake.ID) (*dgo.IncomingWebhook, error) {
+func ensureWebhook(ctx context.Context, d *Deps, channelID snowflake.ID) error {
 	webhook, err := findWebhook(ctx, d, channelID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if webhook != nil {
-		return webhook, nil
+		return nil
 	}
 
-	created, err := d.Rest.CreateWebhook(channelID, dgo.WebhookCreate{Name: webhookName}, rest.WithCtx(ctx))
+	_, err = d.Rest.CreateWebhook(channelID, dgo.WebhookCreate{Name: webhookName}, rest.WithCtx(ctx))
 	if err != nil {
 		if discord.IsForbidden(err) {
-			return nil, userErrorf("Webhookを作成できませんでした。Botに「ウェブフックの管理」権限があるか確認してください。")
+			return userErrorf("Webhookを作成できませんでした。Botに「ウェブフックの管理」権限があるか確認してください。")
 		}
-		return nil, fmt.Errorf("create webhook: %w", err)
+		return fmt.Errorf("create webhook: %w", err)
 	}
-	return created, nil
+	return nil
 }

@@ -49,23 +49,14 @@ const MEMORY_SIZE = 256;
  * */
 const BUILD_DIR = path.join(__dirname, '..', 'lambda', 'build');
 
-/**
- * スタック内の全リソースに付けるタグ。
- * どのリソースがこのBotのものかを、請求やコンソールから辿れるようにする。
- */
-const TAGS: Record<string, string> = {
-  app: 'discord-anonymous-bot',
-};
-
 export class DiscordAnonymousBotStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DiscordAnonymousBotStackProps) {
     super(scope, id, props);
 
+    // どのリソースがこのBotのものかを、請求やコンソールから辿れるようにする。
     // Aspectとして配下のリソースへ伝播する。タグに対応しないリソース
     // (Lambda::Url など) は自動的に読み飛ばされる。
-    for (const [key, value] of Object.entries(TAGS)) {
-      cdk.Tags.of(this).add(key, value);
-    }
+    cdk.Tags.of(this).add('app', 'discord-anonymous-bot');
 
     const queue = this.interactionQueue();
 
@@ -85,7 +76,7 @@ export class DiscordAnonymousBotStack extends cdk.Stack {
     const interaction = this.goFunction('InteractionFunction', {
       target: 'interaction',
       timeout: INTERACTION_TIMEOUT,
-      // BotトークンとsaltはここでもRegistryを引くだけなので渡さない。
+      // Botトークンとsaltはここでもregistryを引くだけなので渡さない。
       environment: {
         DISCORD_PUBLIC_KEY: props.discord.publicKey,
         QUEUE_URL: queue.queueUrl,

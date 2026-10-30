@@ -27,7 +27,7 @@ func slashCommand(t *testing.T, name string) dgo.Interaction {
 
 // Respondが無いとinteraction Lambdaがpanicして、実行者には無応答に見える。
 func TestRegistryEntriesHaveRespond(t *testing.T) {
-	for name, cmd := range Registry {
+	for name, cmd := range registry {
 		if cmd.Respond == nil {
 			t.Errorf("%s: command has no Respond", name)
 		}
@@ -74,7 +74,7 @@ type commandDefinition struct {
 func definitionOf(t *testing.T, name string) commandDefinition {
 	t.Helper()
 
-	def := Registry[name].Definition
+	def := registry[name].Definition
 	if def == nil {
 		t.Fatalf("%s has no definition", name)
 	}

@@ -41,7 +41,7 @@ func runSetup(ctx context.Context, d *Deps, i dgo.Interaction) error {
 	channelID := i.Channel().ID()
 
 	// パネルを置く前にWebhookを用意する。
-	if _, err := ensureWebhook(ctx, d, channelID); err != nil {
+	if err := ensureWebhook(ctx, d, channelID); err != nil {
 		return err
 	}
 

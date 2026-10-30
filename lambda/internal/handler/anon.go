@@ -111,7 +111,7 @@ func runPost(ctx context.Context, d *Deps, i dgo.Interaction) error {
 
 	// 投稿が済んだのでここから先は失敗してもこの処理は成功として扱う。
 	// エラーを返すと再実行され、投稿が重複する。
-	refreshPanel(ctx, d, i)
+	refreshPanel(ctx, d, i.Channel().ID())
 	return nil
 }
 
@@ -120,9 +120,7 @@ func runPost(ctx context.Context, d *Deps, i dgo.Interaction) error {
 // 新しいパネルを作ってから、それ以外のパネルを消す。
 // 逆順にすると、削除に成功して作成に失敗した場合にパネルが1つも無い状態になり、
 // /setup をやり直すまで投稿できなくなる。
-func refreshPanel(ctx context.Context, d *Deps, i dgo.Interaction) {
-	channelID := i.Channel().ID()
-
+func refreshPanel(ctx context.Context, d *Deps, channelID snowflake.ID) {
 	created, err := d.Rest.CreateMessage(channelID, panelMessage(), rest.WithCtx(ctx))
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to post a new panel", "error", err)
