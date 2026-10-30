@@ -1,377 +1,139 @@
 # CLAUDE.md
 
-Discord の匿名メッセージ Bot。パネルのボタンから投稿すると、投稿者を秘匿したまま
-（毎日変わる匿名の表示名 / アイコンで）チャンネルにメッセージが送信される。
+Discord の匿名メッセージ Bot。パネルのボタンから投稿すると、毎日変わる匿名の表示名とアイコンで
+チャンネルにメッセージが送信される。AWS CDK (TypeScript) と Go の Lambda で動かす。
 
-- インフラ: AWS CDK (TypeScript) / アプリ: Go (Lambda `provided.al2023` arm64)
-- Discord クライアント: `disgoorg/disgo`
-- 受信: Lambda Function URL（API Gateway は使わない）
-- 非同期処理: SQS を挟んだ 2 段 Lambda
-- **永続ストアは持たない**（DynamoDB / RDS 等は導入しない）
+ここには、コードを読んでも分からず、知らないと間違えることだけを書く。
+機能の詳細はコードとテストを、手順は[導入手順](./docs/setup.md)と[運用と開発](./docs/operations.md)を見る。
 
 ## アーキテクチャ
 
 ```
 Discord ──HTTP POST──> Lambda Function URL
                              │
-                       [interaction Lambda]  Go
-                         - Ed25519 署名検証 / PING に即 PONG
-                         - Registry を引いて 2 通りに分岐
+                       [interaction Lambda]  署名検証と振り分け
                              │
               ┌──────────────┴───────────────┐
-        （Sync）                        （Async）
-   その場で応答を返す               SQS へ enqueue して ack
-                                           │
-                                    SQS (FIFO) ──> DLQ
-                                           │
-                                    [worker Lambda]  Go
-                                      - 匿名 ID を導出
-                                      - Webhook の username / avatar_url を
-                                        上書きして投稿
-                                      - followup で結果を返す
+           （同期）                       （非同期）
+      その場で応答を返す             SQS (FIFO) に積んで ack ──> DLQ
+                                             │
+                                       [worker Lambda]
+                                         Discord REST を呼ぶ
 ```
 
-**Discord は 3 秒以内に応答がないと interaction を失敗扱いにする。** これが構成上の制約の
-ほぼすべての理由になっている。Discord REST への往復は 3 秒に収まる保証がないため SQS に逃がすが、
-外部 I/O のないコマンドまで経由させると「考え中…」が挟まって体感が悪いので、
-**どちらで処理するかはコマンド単位で選ぶ**。
+- **Discord は 3 秒以内に応答がないと interaction を失敗扱いにする。** これが構成上の制約の
+  ほぼすべての理由になっている。Discord REST への往復は 3 秒に収まる保証がないため SQS に逃がすが、
+  外部 I/O のないコマンドまで経由させると体感が悪いので、どちらで処理するかはコマンド単位で選ぶ。
+- **投稿経路は Webhook に限られる。** Bot 本体として投稿すると匿名にならず、`username` /
+  `avatar_url` の上書きは Execute Webhook でしかできない。
+- 受信は Function URL で、API Gateway は使わない。
 
-Bot 本体として投稿すると匿名にならない。`username` / `avatar_url` の上書きは
-**Execute Webhook でしかできない**ため、投稿経路は Webhook に限られる。
-
-## コマンドのルーティング
-
-`internal/handler` に 1 つの表を持ち、interaction Lambda と worker Lambda が同じ表を参照する。
-コマンド追加はここに 1 行足すだけで済ませる。
-
-```go
-type Mode int
-
-const (
-    Sync  Mode = iota // interaction Lambda 内で完結し、その場で応答を返す
-    Async             // SQS に積み、ack だけ返す。実処理は worker
-)
-
-type Command struct {
-    Mode       Mode
-    Definition *discord.SlashCommandCreate // Discord に登録する定義。ボタン等では nil
-
-    Validate func(discord.Interaction) error                                 // enqueue 前の検査
-    Handle   func(discord.Interaction) (*discord.InteractionResponse, error) // Mode == Sync
-    Work     func(context.Context, *Deps, discord.Interaction) error         // Mode == Async
-}
-
-// キーはコマンド名、またはコンポーネント / モーダルの custom_id。
-var Registry = map[string]Command{ /* 識別子 -> 定義 */ }
-```
-
-- **外部 I/O があるなら `Async`。** Discord REST を呼ぶ、処理時間が読めない、リトライしたい、
-  失敗を DLQ に残したい、のいずれかに当てはまれば `Async`。固定文言や入力検証だけなら `Sync`。
-- **`Sync` ハンドラからネットワーク I/O をしない。** タイムアウトすると interaction 自体が
-  失敗し「アプリケーションが応答しませんでした」が出る。`Handle` に `context.Context` を
-  渡していないのはこれを書けなくするため。I/O が必要になったら `Async` に変える。
-- `Sync` でも入力検証は行い、エラーは即 ephemeral で返す。不正入力を SQS に流さない。
-- SQS に積むのは **interaction の生 JSON + 受信時刻**。worker 側で再パースする。
-  interaction Lambda に業務ロジックを持ち込まない。
-- worker は未知の識別子をエラーにして DLQ へ送る（デプロイ順の食い違いを検知するため）。
-- `discord.Interaction` は disgo では**インターフェース**なので値で渡す。生 JSON からの復元は
-  `discord.UnmarshalInteraction([]byte)`。種類ごとの中身は型アサーションで取り出す。
-
-### 応答順序: enqueue が先、ack は後
-
-`Async` は **SQS に積んでから、HTTP レスポンスのボディで ack を返す**
-（ack の種類は「Discord Interaction の制約」3 を参照）。
-Discord は `POST /interactions/{id}/{token}/callback` で先に ack して元のリクエストに 202 を
-返す方式も認めているが、採用しない。ack 先行だと 3 秒の予算に discord.com への往復を
-持ち込むことになるうえ、enqueue 失敗時のエラーを followup で別途送る必要が出る。
-
-ただし enqueue が遅延すると「キューには残っているのに失敗が見える」ゴースト投稿が起きうる。
-**SendMessage には 1 秒程度の context タイムアウトを張り、SDK の既定リトライに任せない。**
-
-### interaction type ごとの扱い
-
-| type | 内容                | 扱い                                                             |
-| ---- | ------------------- | ---------------------------------------------------------------- |
-| 1    | PING                | 同期で `{"type":1}`。Registry を通さない                         |
-| 2    | APPLICATION_COMMAND | Registry に従って分岐                                            |
-| 3    | MESSAGE_COMPONENT   | モーダルを開くので**必ず同期**で type 9（defer 不可 = I/O 禁止） |
-| 4    | AUTOCOMPLETE        | 使っていない。使う場合も defer できないので `Async` 不可         |
-| 5    | MODAL_SUBMIT        | Registry に従って分岐（匿名投稿は `Async`）                      |
-
-## ディレクトリ構成
-
-**root が CDK アプリ**（`cdk init app --language typescript` の生成物をそのまま使う）。
-Go は `lambda/` 配下の独立した Go モジュール。
-
-```
-.
-├── bin/ lib/ test/               # CDK（cdk init の生成名のままにする）
-├── cdk.json / package.json / tsconfig.json / jest.config.js
-├── Taskfile.yml                  # build + deploy / test をまとめた入口
-├── docs/                         # 利用規約・プライバシーポリシー
-├── lambda/                       # Go モジュール
-│   ├── cmd/
-│   │   ├── interaction/          # Function URL ハンドラ（同期・軽量）
-│   │   ├── worker/               # SQS コンシューマ（Discord REST 呼び出し）
-│   │   └── registercmd/          # コマンド登録 CLI（手動実行）
-│   ├── internal/
-│   │   ├── discord/              # disgo をそのまま使えない部分だけ（後述）
-│   │   ├── anon/                 # 匿名 ID 導出
-│   │   ├── handler/              # Registry とコマンドごとのロジック
-│   │   ├── config/               # 環境変数の読み取りと検証
-│   │   └── queue/                # SQS 送受信のラッパ
-│   ├── tools/build/              # Lambda バイナリのビルドスクリプト
-│   └── build/                    # ビルド成果物（gitignore 対象）
-└── .env                          # 秘匿値（コミット禁止）
-```
-
-- **Go を `lambda/` の独立モジュールにする理由**: root に `go.mod` を置くと、`node_modules` に
-  含まれる CDK の Go テンプレート（`%name%.template.go`）を Go が読もうとして
-  `go vet ./...` / `go test ./...` が失敗する。`lambda/` に切れば探索範囲から外れる。
-- `internal/discord` は **disgo で足りない部分だけ**を持つ。Interaction の型や REST 呼び出しを
-  包み直さない（薄いラッパを重ねても読みにくくなるだけ）。今あるのは次の 4 つ。
-  - Function URL のリクエストから署名検証に渡す形への変換（`VerifiedBody`）
-  - ack と応答の組み立て（`Ack` / `Message` / `Embed` / `Modal`）
-  - メンションの既定を反転させた REST クライアント（`NewRest`）
-  - REST エラーの状態コード判定（`IsForbidden` / `IsNotFound`）。
-    HTTP と `rest.Error` の知識を `handler` に持ち込まないため
-- `internal/config` で環境変数を起動時に一括ロードし、**必須値が欠けていたら起動させない**
-  （`slog.Error` してから `os.Exit(1)`）。
-  各 `main.go` で `os.Getenv` を直接読まない（鍵や salt が空のまま動く事故を防ぐ）。
-  読み取りは `caarlos0/env/v11` のタグで宣言し、**`required` ではなく `notEmpty` を使う**。
-  `required` は「変数が設定されていること」しか見ないため、空文字が通ってしまう。
-  `registercmd` はローカル実行なので `joho/godotenv` で `.env` を読む。
-  godotenv は既に設定されている変数を上書きしないので、シェルでの差し替えが効く。
-
-## ビルドとデプロイの方針
-
-コマンドの一覧と手順は [docs/operations.md](./docs/operations.md) にある。ここには
-実装の判断に効く前提だけを書く。
-
-- **Makefile は置かない。** Windows に `make` が無いため、ビルドも Go で書く
-  （`lambda/tools/build`）。
-- CDK Toolkit は devDependency。グローバルインストールを前提にしない。
-- `Taskfile.yml` は順序と実行ディレクトリをまとめただけの薄い入口。
-  **必須にはしない**（task が無くても個々のコマンドがそのまま動く状態を保つ）。
-- **デプロイはローカルからの `cdk deploy` のみ。** CI/CD は組まない。
-  認証情報は profile ではなく `aws login`（AWS CLI v2）で取得する。
-- Lambda のコードだけ直すときも `cdk deploy` を使う
-  （`aws lambda update-function-code` を手で叩くと CDK の状態とずれる）。
-
-## コーディング規約
-
-### Go
-
-- **Discord との通信は `disgo` を使う**（自前実装しない）。使うのは次の 3 つだけで、
-  `bot` / `gateway` / `cache` は使わない。
-  - `disgo/discord` — Interaction・応答・コマンド定義の型
-  - `disgo/rest` — REST クライアント
-  - `disgo/httpserver` — `DefaultVerifier` による署名検証**のみ**。`httpserver.New` は
-    自前の HTTP サーバを立てる作りなので Lambda では使わない
-- **`disgo` は v0.x で破壊的変更がありうる。** `go.mod` で固定し、更新時は型変更を確認する。
-- 許可する外部依存はこれだけ: `disgoorg/disgo`、`aws/aws-lambda-go`、`aws/aws-sdk-go-v2/*`、
-  `caarlos0/env/v11`、`joho/godotenv`。追加したくなったら、まず標準ライブラリで
-  書けないか検討する。
-- エラーは `fmt.Errorf("...: %w", err)` でラップして返す。ログ出力はハンドラ最上位だけ。
-- `internal/` 配下はテスト必須。Discord REST は `rest.WithHTTPClient` に stub を渡してテストする。
-
-### CDK (TypeScript)
-
-- **スタックは 1 つ、環境も 1 つ。** dev/prod の出し分けや環境名のパラメータ化はしない。
-- Lambda は `lambda.Function` + `Code.fromAsset('lambda/build/<関数名>')`。
-  `GoFunction` / Docker バンドルは使わない（ビルドは `lambda/tools/build` に一本化する）。
-  CDK は root で動くのでアセットのパスも root 起点で書く。
-- `Runtime.PROVIDED_AL2023` / `Architecture.ARM_64` / ハンドラ名 `bootstrap`。
-- Function URL は `authType: NONE`（Discord は署名で認証するため）。
-  **必ず Lambda 側で署名検証すること。**
-- **全リソースに `app: discord-anonymous-bot` タグを付ける**（`Tags.of(this)` で伝播）。
-  請求やコンソールから、このアプリのリソースを辿れるようにする。
-  タグに対応しないリソース（`Lambda::Url` など）は CDK が読み飛ばす。
-- SQS は FIFO。`MessageGroupId` = チャンネル ID、`MessageDeduplicationId` = interaction ID。
-  同一チャンネルへの投稿は直列化されるが、個人利用の規模では問題にならない。
-
-| 対象                   | 設定                                                     |
-| ---------------------- | -------------------------------------------------------- |
-| interaction Lambda     | timeout **3 秒** / memory 256 MB                         |
-| worker Lambda          | timeout 30 秒 / memory 256 MB                            |
-| SQS visibilityTimeout  | **180 秒**（worker timeout の 6 倍。短いと二重実行する） |
-| SQS の Lambda トリガー | `batchSize: 1`                                           |
-| SQS DLQ                | `maxReceiveCount: 1`（再配信すると投稿が重複する）       |
-| CloudWatch Logs        | `retention: ONE_MONTH`                                   |
-
-interaction Lambda を 3 秒より長くしても Discord が先に諦めるだけで、課金が増え異常に
-気付きにくくなる。変更後は `npx cdk diff` で意図しないリソース置換がないか見る。
-
-## Discord Interaction の制約（必ず守る）
-
-1. **署名検証**: `X-Signature-Ed25519` / `X-Signature-Timestamp` + raw body を
-   `httpserver.DefaultVerifier{}.Verify(publicKey, append(timestamp, body...), sig)` で検証。
-   失敗時は **HTTP 401**（403 や 400 だとエンドポイント検証に通らない）。
-   body は整形せず受け取ったバイト列のまま使う。Function URL の `isBase64Encoded` が
-   true のケースを考慮すること。
-2. **PING**（type 1）は同期で `{"type":1}`。SQS には流さない。
-3. **3 秒ルール**: `Async` は即 ack する。方式は Interaction の種類で決まるので
-   コマンド側で選ばない（`discord.Ack` / `discord.AckShowsThinking`）。
-   - コンポーネント / MODAL_SUBMIT -> **type 6（DEFERRED_UPDATE_MESSAGE）で無言 ack**。
-     「考え中…」が出ない。`@original` は**元のメッセージ（パネル）を指す**ので、
-     結果は `CreateFollowupMessage` で伝える（編集するとパネルが書き換わる）。
-   - スラッシュコマンド -> type 5（deferred, ephemeral）。type 6 は使えない。
-     `@original` が「考え中…」を指すので、**必ず `UpdateInteractionResponse` で埋める**
-     （放置すると「考え中…」が消えない）。
-   投稿者への応答は ephemeral にして、投稿内容が公開チャンネルに漏れないようにする。
-4. **followup トークンの有効期限は 15 分。** worker はこれを超えないようリトライを絞る。
-5. **Discord への投稿は 1 回だけ試行する。** Discord は interaction を再送しないが、
-   SQS の再配信で重複投稿が起きうる（投稿してから落ちるケース）。失敗は DLQ に送る。
-6. レート制限: 429 の `retry_after` を尊重する。Webhook ごとの制限に注意。
-
-## 匿名化の仕様
-
-投稿者の識別子は保存せず、投稿のたびに導出する（`internal/anon`）。
-
-```
-sum := sha256.Sum256([]byte(userID + ":" + date + ":" + salt))   // 32 バイト
-        ├─ sum[0:8]  ──> namePrefix のインデックス
-        ├─ sum[8:16] ──> nameSuffix のインデックス
-        └─ sum[16:32] ─> DiceBear の seed（hex 32 文字）
-```
-
-- `date` は **UTC** の `YYYY-MM-DD`。日が変われば匿名 ID も変わり、日をまたいだ追跡ができない。
-  `now.UTC()` で丸める（`now` のロケーションに任せると、渡された時刻の場所で境界がずれる）。
-- インデックスは `binary.BigEndian.Uint64(sum[0:8]) % uint64(len(namePrefix))`。
-- 表示名は **namePrefix + nameSuffix**（例:「しずかなうさぎ」）。リストは `internal/anon` に持つ。
-  **順序は変更しない**（途中に挿入するとその日の全員の名前がずれる）。追加は末尾のみ。
-- 語彙にネガティブな語・人を指す語は入れない（匿名の名前が侮辱に読めないように）。
-- アイコンは `https://api.dicebear.com/10.x/shapes/png?size=128&seed=%s` を `avatar_url` に
-  そのまま渡す（`%s` は `hex.EncodeToString(sum[16:32])`）。画像を取りに行くのは Discord 側なので
-  Lambda から DiceBear への通信は発生しない。
-- 表示名は組み合わせ数が限られるので衝突しうる。**同じ名前でも別人の可能性がある**ことは
-  `/help` に明記する。アイコンは 128 ビット由来なので実質衝突しない。
-- salt を変えると過去の匿名 ID と紐づかなくなる。
-
-## コマンド / インタラクション仕様
-
-| トリガー       | モード  | 応答                                                                 |
-| -------------- | ------- | -------------------------------------------------------------------- |
-| `/ping`        | `Sync`  | ephemeral。`pong` を返すだけの疎通確認用                             |
-| `/help`        | `Sync`  | ephemeral。使い方と匿名化の説明（名前の衝突・日替わりを含む）        |
-| `/setup`       | `Async` | Webhook を用意しパネルを投稿。実行者にのみ ephemeral で結果を返す    |
-| パネルのボタン | `Sync`  | type 9 でモーダルを返す。**defer 不可なので I/O 禁止**               |
-| モーダル送信   | `Async` | **type 6 で無言 ack** -> worker が匿名投稿（成功時は何も表示しない） |
-
-### コマンド定義と登録
-
-- 定義は `discord.SlashCommandCreate` で書き、**`Registry` に一緒に持たせる**。
-  `registercmd` はそれを送るだけにして二重管理しない。
-- **global 登録のみ**を `rest.SetGlobalCommands`（bulk overwrite）で行う。
-  guild 登録は使わない。個別の `Create` だと削除したコマンドが残る。
-- global 登録は**即時反映を期待しない**。クライアント側にキャッシュがあるので、変更が
-  見えなくてもまず待つ・クライアントを再起動する（実装を疑う前に）。
-- `Contexts` と `IntegrationTypes` を**必ず明示する**。省略すると Discord の既定に従い、
-  意図しない場所で使えてしまう。`dm_permission` は**非推奨**なので使わない。
-- **Webhook を使う `/setup` はサーバー限定**にする（`InteractionContextTypeGuild` と
-  `ApplicationIntegrationTypeGuildInstall` のみ）。DM では Webhook を作れず機能しない。
-- 情報を表示するだけの `/ping` と `/help` は DM とユーザーインストールも許可している。
-  **`ApplicationIntegrationTypeUserInstall` を使うには Developer Portal の
-  Installation Contexts で User Install を有効にしておく必要がある**
-  （アプリ側が対応していない context は登録時に拒否される）。
-
-### Bot に必要な権限
-
-OAuth2 スコープ `bot` + `applications.commands`、権限は **Manage Webhooks / Send Messages /
-View Channel / Read Message History** = `permissions=536939520`。
-Manage Webhooks が無いと `/setup` が失敗する。**Read Message History が無いと
-`GetMessages` がエラーではなく空を返す**ので、古いパネルを掃除できずに増え続ける。
-権限を変えたら招待 URL も更新して入れ直す必要がある。
-
-### `/setup`
-
-- チャンネルの Webhook を `GetWebhooks` で探し、**自アプリ所有のものが無ければ**作成する
-  （名前は固定にして再利用可能にする）。**冪等にする**（二度実行しても Webhook は増やさない）。
-- ボタン 1 つ（`style: PRIMARY`、ラベル「メッセージを送信」、`custom_id: "anon:open"`）を持つ
-  パネルを投稿する。パネル自体は Bot として投稿してよい（匿名投稿ではない）。
-- `default_member_permissions` で **Manage Guild** を要求し、一般ユーザーが実行できないようにする。
-
-### ボタン -> モーダル -> 匿名投稿
-
-- `custom_id` は `anon:` 名前空間で分岐する（`anon:open` / `anon:submit`）。
-- モーダルの入力欄は `TextInputComponent`（`TextInputStyleParagraph`）1 つ。
-  **`LabelComponent` で包む**。disgo の `TextInputComponent` は `Label` を持たないため、
-  ラベルを付ける方法はこれだけ。
-- **`MaxLength: 2000`** を設定して Discord のメッセージ上限を入力段階で弾く
-  （設定しないと 4000 文字まで入力でき、送信後にエラーになる）。
-  `Required: true` も付ける（空送信を入力段階で弾く）。`title` とラベルは 45 文字以内。
-  空白だけの入力は Discord 側で弾けないので、`Validate` で落とす。
-- 投稿先は**モーダル送信時に渡される `channel_id`**。パネルの位置を覚える必要はない。
-- interaction Lambda は本文の空文字と長さだけ検証して SQS に積む。
-- worker は匿名 ID を導出し、`CreateWebhookMessage` を `username` / `avatar_url` 上書きで呼ぶ。
-  **`allowed_mentions` は `discord.NoMentions()` を明示**し、`@everyone` やロールメンションが
-  匿名投稿から飛ばないようにする。
-- **REST クライアントは必ず `internal/discord.NewRest` で作る。** disgo は `AllowedMentions` が
-  nil の送信に users / roles / everyone すべてを許可する値を埋めるため、
-  `rest.WithDefaultAllowedMentions` で既定を空に反転させてある。利用者の入力を載せる
-  匿名投稿だけは、既定に頼らず明示もしておく。
-- **Webhook が消えていても再作成しない。** 「`/setup` をやり直してください」と followup で伝える
-  （勝手に作り直すと権限の無いチャンネルに投稿しうる）。
-- 投稿後、**パネルを作り直してチャンネルの一番下に置く**。投稿が増えるとパネルが上に
-  流れてボタンを探しにくくなるため。
-  **先に新パネルを作ってから、直近のメッセージを引いて他のパネルを消す。**
-  逆順だと、削除後に作成が失敗した場合にパネルが 1 つも無い状態になり、`/setup` を
-  やり直すまで投稿できなくなる。
-  モーダルを開いたメッセージだけを消すやり方は使わない。同じパネルから複数人が
-  モーダルを開くと、後から送信した側の削除が 404 になる一方で新パネルはそれぞれ
-  作られ、パネルが増える。まとめて掃除して 1 枚に収束させる。
-- **掃除の対象から Webhook 投稿を必ず除外する**（`Message.WebhookID`）。
-  匿名メッセージは自アプリの Webhook で投稿しているため、除外しないと
-  利用者の投稿を消してしまう。
-- **投稿が済んだ後の失敗（パネルの張り替え、followup）はログに残すだけにする。**
-  エラーを返すと DLQ 行きになるうえ、再実行されれば投稿が重複する。
-- **worker はどんな経路で失敗しても必ず followup を返す。** deferred のまま放置すると
-  「考え中…」が消えず、成功したか分からない状態になる。
-
-### 使う REST メソッド
-
-`disgo/rest` 経由で呼び、直接 HTTP を組み立てない。
-
-| 用途                    | メソッド                        |
-| ----------------------- | ------------------------------- |
-| deferred の内容を埋める | `UpdateInteractionResponse`     |
-| 追加の followup         | `CreateFollowupMessage`         |
-| 匿名投稿                | `CreateWebhookMessage`          |
-| Webhook 一覧 / 作成     | `GetWebhooks` / `CreateWebhook` |
-| パネル投稿              | `CreateMessage`                 |
-| パネルの掃除            | `GetMessages` / `DeleteMessage` |
-| コマンド登録            | `SetGlobalCommands`             |
-
-followup と Webhook 実行は **Bot トークン不要**（token 自体が認証）。Bot トークンが要るのは
-Webhook の一覧 / 作成、パネル投稿、コマンド登録だけ。
-
-## 環境変数
-
-`.env` に定義し、CDK から Lambda に注入する。**`.env` はコミットしない。**
-
-| 変数                     | 用途                              | 使う場所            |
-| ------------------------ | --------------------------------- | ------------------- |
-| `DISCORD_BOT_TOKEN`      | Webhook の取得 / 作成、パネル投稿 | worker, registercmd |
-| `DISCORD_PUBLIC_KEY`     | Ed25519 署名検証                  | interaction         |
-| `DISCORD_APPLICATION_ID` | followup / コマンド登録           | worker, registercmd |
-| `ANONYMOUS_SALT`         | 匿名 ID の導出                    | worker              |
-| `QUEUE_URL`              | SQS 送信先。CDK が注入する        | interaction         |
-
-`registercmd` はローカル実行なので `.env` を直接読む。global 登録のため、登録先ギルドを
-指定する環境変数は持たない。
-
-## やらないこと（スコープ外）
+## やらないこと
 
 個人開発・小規模運用のため**意図的に実装しない**。気を利かせて足さないこと。
 
-- Gateway（WebSocket）接続。HTTP interaction のみ扱う。
-- パネルやメッセージ ID の保存。Webhook は毎回 Discord から引き直す。
-- 投稿者と投稿内容の記録。**誰が何を投稿したかはログにも残さない。**
-  荒れたときはメッセージの削除とパネルの撤去で対処する前提。
-  管理者が投稿者を逆算する機能も、同じ理由で入れない。
+- **永続ストア**（DynamoDB / RDS 等）。パネルやメッセージの ID も保存せず、Webhook は毎回
+  Discord から引き直す。
+- **投稿者と投稿内容の記録。** 誰が何を投稿したかはログにも残さない。管理者が投稿者を逆算する
+  機能も入れない。荒れたときはメッセージの削除とパネルの撤去で対処する。
 - **濫用対策**（レート制限・連投抑止・ブロック）。永続ストアが無いため実装できない。
 - **監視・アラート**（DLQ 通知、CloudWatch Alarm）。問題が起きたらログを直接見る。
 - **ローカル実行環境**（署名付きリクエストのテストハーネス、SAM Local 等）。
-  検証は `internal/` のユニットテストで行い、結合は実環境で確認する。
-- CI/CD、複数環境（dev/prod）の分離。
-- 秘匿値を CDK のコードやテンプレートに直接書くこと。
+  検証はユニットテストで行い、結合は実環境で確認する。
+- Gateway（WebSocket）接続、CI/CD、複数環境（dev/prod）の分離。
+
+## 実装の約束
+
+### コマンドの処理
+
+コマンドの追加は `internal/handler` の `registry` に 1 行足す。両方の Lambda が同じ表を参照し、
+`registercmd` もここから定義を登録するので、二重管理しない。
+
+- **外部 I/O があるなら `Work` に書く。** Discord REST を呼ぶ、処理時間が読めない、失敗を DLQ に
+  残したい、のいずれかに当てはまれば `Work`。固定文言や入力検証だけなら `Respond`。
+- **`Respond` からネットワーク I/O をしない。** タイムアウトすると interaction 自体が失敗する。
+  `context.Context` を渡していないのは、これを書けなくするため。
+- **入力の拒否は `Respond` から `error` で返す。** 拒否の文面を応答として返すと `Work` が実行される。
+- **`Work` を持つコマンドの `Respond` は `Ack` を返す。** 別の応答にすると worker の返信先がずれ、
+  Discord に拒否される応答なら、失敗と見えるのに `Work` だけが動く。
+- **enqueue が先、ack は後。** ack は HTTP レスポンスのボディで返す。先に callback API で ack すると、
+  3 秒の予算に discord.com への往復が入り、enqueue 失敗時のエラーも別途送る必要が出る。
+- **SQS への送信は約 1 秒で打ち切り、SDK の既定リトライに任せない。** 遅れると、キューには
+  残っているのに実行者には失敗が見える状態になる。
+- SQS には interaction の生 JSON と受信時刻を積み、worker 側で再パースする。interaction Lambda に
+  業務ロジックを持ち込まない。
+
+### 匿名性
+
+- 匿名 ID は保存せず、投稿のたびに利用者 ID・UTC の日付・salt から導出する。
+- 語彙を変えると添字の計算（`% len`）が変わるので、末尾への追加でもその日の全員の名前がずれる。
+  ネガティブな語や人を指す語は入れない。
+- 表示名は衝突しうる。同じ名前でも別人の可能性があることは `/help` に明記する。
+- salt を変えると過去の匿名 ID と紐づかなくなる。
+
+### 投稿
+
+- **Discord への投稿は 1 回だけ試行する。** 再配信で投稿が重複するので、`maxReceiveCount` は 1 に
+  して、失敗は DLQ に送る。
+- **投稿が済んだ後の失敗（パネルの張り替え、通知）はログに残すだけにする。** エラーを返すと
+  DLQ 行きになるうえ、再実行されれば投稿が重複する。
+- **失敗は実行者に必ず伝える。** deferred のまま放置すると「考え中…」が消えない。
+  ただし token 切れなどで届かない場合は除く。
+- **REST クライアントは必ず `NewRest` で作る。** disgo は `AllowedMentions` が nil の送信で全メンションを
+  許可するので、既定を反転させてある。利用者の入力を載せる匿名投稿では、既定に頼らず
+  `NoMentions()` を明示する。
+- **実行者への応答は ephemeral にする。** 投稿内容や結果が公開チャンネルに漏れないようにする。
+- **Webhook が消えていても再作成しない。** 権限の無いチャンネルに投稿しうるので、`/setup` の
+  やり直しを案内する。
+- **パネルの掃除から Webhook 投稿を必ず除外する。** 匿名メッセージも自アプリの Webhook で
+  投稿しているので、除外しないと利用者の投稿を消す。
+
+## Discord の落とし穴
+
+- **署名検証:** Function URL は認証なしで公開するので、必ず Lambda 側で検証する。失敗時は
+  **HTTP 401** を返す（他のコードではエンドポイント検証に通らない）。本文は受け取ったバイト列のまま
+  使い、`isBase64Encoded` が true の場合も考慮する。
+- **ack の方式は Interaction の種類で決まる。** スラッシュコマンドは type 5（「考え中…」）だけ使え、
+  `@original` はその「考え中…」を指す。コンポーネントとモーダル送信は type 6（無言）を使い、
+  `@original` は元のパネルを指すので、編集せず followup で伝える。
+- **モーダルを開く応答と AUTOCOMPLETE は defer できない。** どちらも `Work` に移せない。
+- **`Read Message History` 権限が無いと、`GetMessages` はエラーではなく空を返す。** 古いパネルを掃除
+  できず増え続ける。権限を変えたら招待 URL も更新して入れ直す。
+- **コマンド定義の `Contexts` と `IntegrationTypes` は必ず明示する。** 省略すると意図しない場所で
+  使える。`dm_permission` は非推奨なので使わない。
+- **`ApplicationIntegrationTypeUserInstall` は Developer Portal の設定が必要。** Installation Contexts で
+  User Install を有効にしていないと、登録時に拒否される。
+- **登録は global のみで、`SetGlobalCommands`（bulk overwrite）を使う。** 個別の `Create` だと削除した
+  コマンドが残る。反映は即時ではないので、変更が見えなくてもまず待つか、クライアントを再起動する。
+
+## 技術上の決まり
+
+### Go
+
+- **外部依存は次に限る:** `disgoorg/disgo`（と、その API が使う `disgoorg/omit` / `disgoorg/snowflake`）、
+  `aws/aws-lambda-go`、`aws/aws-sdk-go-v2/*`、`caarlos0/env/v11`、`joho/godotenv`。
+  追加したくなったら、まず標準ライブラリで書けないか検討する。
+- **disgo で使うのは `discord` と `rest` だけ。** `bot` / `gateway` / `cache` / `httpserver` は使わない。
+  `httpserver` は自前の HTTP サーバを立てる作りで、署名検証も `crypto/ed25519` の呼び出しだけなので、
+  標準ライブラリを直接使う。v0.x で破壊的変更がありうるので、更新時は型の変更を確認する。
+- **Discord との通信を自前で組み立てない。** `internal/discord` は disgo で足りない部分だけを持ち、
+  Interaction の型や REST 呼び出しを包み直さない。
+- **環境変数は `internal/config` で読む。** 必須値が欠けていたら起動させない。タグは `required` では
+  なく `notEmpty` を使う（`required` は空文字を通す）。
+- **Go は `lambda/` の独立モジュールにする。** root に `go.mod` を置くと、`node_modules` 内の CDK の
+  Go テンプレートを読もうとして `go vet ./...` / `go test ./...` が失敗する。
+- エラーは `fmt.Errorf("...: %w", err)` でラップして返す。ログ出力はハンドラ最上位だけにする
+  （投稿後の失敗のように、エラーを返さない処理を除く）。
+- `internal/` はテスト必須。Discord REST は `rest.WithHTTPClient` に stub を渡してテストする。
+
+### CDK とデプロイ
+
+- **スタックは 1 つ、環境も 1 つ。** 環境名のパラメータ化はしない。
+- **Lambda は `lambda.Function` と `Code.fromAsset` で作る。** `GoFunction` / Docker バンドルは使わず、
+  ビルドは `lambda/tools/build` に一本化する。
+- **秘匿値は `.env` に置き、コミットしない。** CDK のコードやテンプレートに直接書かない。
+- **デプロイはローカルからの `cdk deploy` のみ。** コードだけ直すときも同じで、
+  `aws lambda update-function-code` は CDK の状態とずれるので使わない。認証は `aws login` で行う。
+- **Makefile は置かない。** Windows に `make` が無いので、ビルドも Go で書く。
+- **`Taskfile.yml` は薄い入口で、必須にしない。** task が無くても個々のコマンドが動く状態を保つ。
+  CDK Toolkit も devDependency にして、グローバルインストールを前提にしない。
