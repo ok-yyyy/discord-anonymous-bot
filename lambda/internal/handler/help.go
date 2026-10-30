@@ -10,7 +10,6 @@ const embedColor = 0x197A4B
 
 // help は使い方を表示するコマンド。実行者にだけ見せる。
 var help = Command{
-	Mode: Sync,
 	Definition: &dgo.SlashCommandCreate{
 		Name:        "help",
 		Description: "Shows how to use this bot",
@@ -26,9 +25,8 @@ var help = Command{
 			dgo.InteractionContextTypeBotDM,
 		},
 	},
-	Handle: func(dgo.Interaction) (*dgo.InteractionResponse, error) {
-		resp := discord.Embed(helpEmbed())
-		return &resp, nil
+	Respond: func(dgo.Interaction) (dgo.InteractionResponse, error) {
+		return discord.Embed(helpEmbed()), nil
 	},
 }
 

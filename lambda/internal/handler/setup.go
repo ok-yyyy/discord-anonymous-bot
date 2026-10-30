@@ -13,9 +13,8 @@ import (
 
 // setup はチャンネルに投稿パネルを設置するコマンド。
 //
-// Webhookの確認・作成とパネルの投稿でDiscord APIを複数回呼ぶためAsync。
+// Webhookの確認・作成とパネルの投稿でDiscord APIを複数回呼ぶためworkerで処理する。
 var setup = Command{
-	Mode: Async,
 	Definition: &dgo.SlashCommandCreate{
 		Name:        "setup",
 		Description: "Setup anonymous channel",
@@ -31,6 +30,9 @@ var setup = Command{
 		Contexts: []dgo.InteractionContextType{
 			dgo.InteractionContextTypeGuild,
 		},
+	},
+	Respond: func(i dgo.Interaction) (dgo.InteractionResponse, error) {
+		return discord.Ack(i), nil
 	},
 	Work: runSetup,
 }

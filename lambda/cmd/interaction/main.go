@@ -86,31 +86,21 @@ func (a *app) route(ctx context.Context, i dgo.Interaction, raw []byte) dgo.Inte
 		return discord.Message(msgNotImplemented)
 	}
 
-	if cmd.Mode == handler.Sync {
-		resp, err := cmd.Handle(i)
-		if err != nil {
-			return discord.Message(a.userMessage(ctx, i, err, "sync handler failed"))
-		}
-		return *resp
+	// エラーならSQSに積まないので、不正な入力はworkerまで届かない。
+	resp, err := cmd.Respond(i)
+	if err != nil {
+		return discord.Message(a.userMessage(ctx, i, err, "interaction handler failed"))
 	}
 
-	return a.enqueue(ctx, cmd, i, raw)
-}
-
-// enqueue はAsyncのコマンドをSQSに積み、deferredの応答を返す。
-func (a *app) enqueue(ctx context.Context, cmd handler.Command, i dgo.Interaction, raw []byte) dgo.InteractionResponse {
-	// 不正な入力をworkerまで運ばない。
-	if cmd.Validate != nil {
-		if err := cmd.Validate(i); err != nil {
-			return discord.Message(a.userMessage(ctx, i, err, "validation failed"))
+	// 応答はこの関数から返して初めて送られるので、積むのが先になる。
+	// 失敗したらackの代わりにエラーを返せる。
+	if cmd.Work != nil {
+		if err := a.sender.Send(ctx, groupID(i), i.ID().String(), raw); err != nil {
+			return discord.Message(a.userMessage(ctx, i, err, "failed to enqueue the interaction"))
 		}
 	}
 
-	if err := a.sender.Send(ctx, groupID(i), i.ID().String(), raw); err != nil {
-		return discord.Message(a.userMessage(ctx, i, err, "failed to enqueue the interaction"))
-	}
-
-	return discord.Ack(i)
+	return resp
 }
 
 // groupID はFIFOキューの順序を保つ単位を返す。

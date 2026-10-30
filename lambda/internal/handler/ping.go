@@ -8,7 +8,6 @@ import (
 
 // ping は疎通確認用のコマンド。外部I/Oが無いので同期で返す。
 var ping = Command{
-	Mode: Sync,
 	Definition: &dgo.SlashCommandCreate{
 		Name:        "ping",
 		Description: "Responds with pong",
@@ -24,8 +23,7 @@ var ping = Command{
 			dgo.InteractionContextTypeBotDM,
 		},
 	},
-	Handle: func(dgo.Interaction) (*dgo.InteractionResponse, error) {
-		resp := discord.Message("pong")
-		return &resp, nil
+	Respond: func(dgo.Interaction) (dgo.InteractionResponse, error) {
+		return discord.Message("pong"), nil
 	},
 }

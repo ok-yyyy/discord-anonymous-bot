@@ -126,6 +126,25 @@ func TestHandleSyncCommand(t *testing.T) {
 	}
 }
 
+// 拒否した入力はSQSに積まず、その場で理由を返す。
+// newAppのsenderはnilなので、積もうとするとpanicして失敗する。
+func TestHandleRejectedInputIsNotEnqueued(t *testing.T) {
+	a, priv := newApp(t)
+
+	body := `{"id":"1","application_id":"2","type":5,"token":"t","version":1,` +
+		`"data":{"custom_id":"anon:submit","components":[{"type":18,"component":` +
+		`{"type":4,"custom_id":"message","value":"   "}}]},` +
+		`"channel":{"id":"4","type":0},"user":{"id":"5","username":"u","discriminator":"0"}}`
+
+	resp, err := a.handle(context.Background(), signed(priv, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := responseType(t, resp); got != dgo.InteractionResponseTypeCreateMessage {
+		t.Errorf("response type = %d, want %d", got, dgo.InteractionResponseTypeCreateMessage)
+	}
+}
+
 // 未登録のコマンドでも応答は返す。無応答だと実行者にはエラーだけが残る。
 func TestHandleUnknownInteractionStillResponds(t *testing.T) {
 	a, priv := newApp(t)

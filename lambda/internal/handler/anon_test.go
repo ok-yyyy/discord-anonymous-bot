@@ -157,7 +157,7 @@ func modalSubmitFrom(t *testing.T, content string, fromPanel bool) dgo.Interacti
 
 // モーダルはdeferredにできないので、同期でtype 9を返す。
 func TestOpenModalReturnsModal(t *testing.T) {
-	resp, err := openModal.Handle(nil)
+	resp, err := openModal.Respond(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestOpenModalReturnsModal(t *testing.T) {
 
 // モーダルの入力欄にはラベルが必要。TextInput単体では持てないのでLabelで包む。
 func TestOpenModalUsesLabelComponent(t *testing.T) {
-	resp, _ := openModal.Handle(nil)
+	resp, _ := openModal.Respond(nil)
 	modal := resp.Data.(dgo.ModalCreate)
 
 	label := modal.Components[0].(dgo.LabelComponent)
@@ -284,8 +284,19 @@ func TestRunPostUsesAnonymousIdentity(t *testing.T) {
 // MODAL_SUBMITは無言ackになる。@originalはモーダルを開いたパネルを指すので、
 // 結果はfollowupで伝えなければパネルが書き換わる。
 func TestModalSubmitAcksSilently(t *testing.T) {
-	if discord.AckShowsThinking(modalSubmit(t, "x")) {
-		t.Error("a modal submit should be acknowledged silently")
+	resp, err := postAnonymousMessage.Respond(modalSubmit(t, "x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Type != dgo.InteractionResponseTypeDeferredUpdateMessage {
+		t.Errorf("type = %d, want %d", resp.Type, dgo.InteractionResponseTypeDeferredUpdateMessage)
+	}
+}
+
+// 不正な入力はerrorで拒否する。応答として返すとSQSに積まれてしまう。
+func TestModalSubmitRejectsInvalidMessage(t *testing.T) {
+	if _, err := postAnonymousMessage.Respond(modalSubmit(t, "   ")); err == nil {
+		t.Error("want an error")
 	}
 }
 

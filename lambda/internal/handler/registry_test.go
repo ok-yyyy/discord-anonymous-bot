@@ -25,17 +25,11 @@ func slashCommand(t *testing.T, name string) dgo.Interaction {
 	return i
 }
 
-// SyncとAsyncで埋めるべきフィールドが入れ替わるため、取り違えを検出する。
-func TestRegistryEntriesAreConsistent(t *testing.T) {
+// Respondが無いとinteraction Lambdaがpanicして、実行者には無応答に見える。
+func TestRegistryEntriesHaveRespond(t *testing.T) {
 	for name, cmd := range Registry {
-		if cmd.Mode == Sync && cmd.Handle == nil {
-			t.Errorf("%s: Sync command has no Handle", name)
-		}
-		if cmd.Mode == Async && cmd.Work == nil {
-			t.Errorf("%s: Async command has no Work", name)
-		}
-		if cmd.Mode == Async && cmd.Handle != nil {
-			t.Errorf("%s: Async command must not have Handle", name)
+		if cmd.Respond == nil {
+			t.Errorf("%s: command has no Respond", name)
 		}
 	}
 }
@@ -157,7 +151,7 @@ func TestDefinitionsDoNotUseDMPermission(t *testing.T) {
 }
 
 func TestPingReturnsPong(t *testing.T) {
-	resp, err := ping.Handle(slashCommand(t, "ping"))
+	resp, err := ping.Respond(slashCommand(t, "ping"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +173,7 @@ func TestPingReturnsPong(t *testing.T) {
 func helpMessage(t *testing.T) dgo.MessageCreate {
 	t.Helper()
 
-	resp, err := help.Handle(slashCommand(t, "help"))
+	resp, err := help.Respond(slashCommand(t, "help"))
 	if err != nil {
 		t.Fatal(err)
 	}
