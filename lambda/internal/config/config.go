@@ -10,6 +10,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 
 	"github.com/caarlos0/env/v11"
 )
@@ -19,8 +20,8 @@ import (
 // Botトークンとsaltは渡さない。このLambdaは署名検証とenqueueしかしないので、
 // 漏れる面を狭くしておく。
 type Interaction struct {
-	PublicKey PublicKey `env:"DISCORD_PUBLIC_KEY,notEmpty"` // PublicKey はInteractionの署名を検証する公開鍵
-	QueueURL  string    `env:"QUEUE_URL,notEmpty"`          // QueueURL は非同期処理を積むSQSキュー
+	PublicKey ed25519.PublicKey `env:"DISCORD_PUBLIC_KEY,notEmpty"` // PublicKey はInteractionの署名を検証する公開鍵
+	QueueURL  string            `env:"QUEUE_URL,notEmpty"`          // QueueURL は非同期処理を積むSQSキュー
 }
 
 // LoadInteraction はinteraction Lambdaの設定を環境変数から読む。
@@ -31,31 +32,29 @@ func LoadInteraction() (*Interaction, error) {
 // load は環境変数を読み込んで検証する。
 func load[T any]() (*T, error) {
 	var cfg T
-	if err := env.Parse(&cfg); err != nil {
+	err := env.ParseWithOptions(&cfg, env.Options{FuncMap: map[reflect.Type]env.ParserFunc{
+		reflect.TypeFor[ed25519.PublicKey](): parsePublicKey,
+	}})
+	if err != nil {
 		return nil, fmt.Errorf("load configuration: %w", err)
 	}
 	return &cfg, nil
 }
 
-// PublicKey はEd25519の公開鍵。16進文字列として環境変数から読む。
+// parsePublicKey は16進文字列からEd25519の公開鍵を読む。
 //
-// ed25519.PublicKeyをそのままフィールドに使うとenvが[]byteの各要素を
-// 数値として読もうとして失敗するため、独自の型にしてUnmarshalTextを持たせる。
-type PublicKey ed25519.PublicKey
-
-// UnmarshalText はenvがフィールドを埋めるときに呼ばれる。
+// envはパーサの戻り値をそのままフィールドに入れるので、[]byteではなくed25519.PublicKeyとして返す。
 //
 // エラーに値の中身を含めない。
 // 公開鍵の欄に誤って秘匿値を設定した場合にログへ流さないため。
-func (k *PublicKey) UnmarshalText(text []byte) error {
-	key, err := hex.DecodeString(string(text))
+func parsePublicKey(v string) (any, error) {
+	key, err := hex.DecodeString(v)
 	if err != nil {
-		return fmt.Errorf("not a hex string: %w", err)
+		return nil, fmt.Errorf("not a hex string: %w", err)
 	}
 	if len(key) != ed25519.PublicKeySize {
-		return fmt.Errorf("must be %d bytes, got %d", ed25519.PublicKeySize, len(key))
+		return nil, fmt.Errorf("must be %d bytes, got %d", ed25519.PublicKeySize, len(key))
 	}
 
-	*k = PublicKey(key)
-	return nil
+	return ed25519.PublicKey(key), nil
 }

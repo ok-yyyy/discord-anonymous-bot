@@ -23,7 +23,7 @@ func newApp(t *testing.T) (*app, ed25519.PrivateKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &app{cfg: &config.Interaction{PublicKey: config.PublicKey(pub)}}, priv
+	return &app{cfg: &config.Interaction{PublicKey: pub}}, priv
 }
 
 func signed(priv ed25519.PrivateKey, body string) events.LambdaFunctionURLRequest {
